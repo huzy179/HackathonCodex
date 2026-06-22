@@ -1,3 +1,4 @@
+import asyncio
 import fitz  # PyMuPDF
 import os
 import json
@@ -6,22 +7,37 @@ from datetime import datetime
 from openai import AsyncOpenAI
 from .schemas import ExtractedDocument, Discrepancy
 
-# Initialize Async OpenAI Client
+# Initialize single shared Async OpenAI Client (reused across all agents)
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def pdf_to_base64_image(file_bytes: bytes) -> str:
+# Maximum PDF file size accepted (10 MB) — guard against memory exhaustion
+MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def _render_pdf_to_base64(file_bytes: bytes) -> str:
     """
-    Renders the first page of the PDF to a JPEG image, encodes it to base64, and returns the base64 string.
+    [Sync] Renders the first page of a PDF to a JPEG image and encodes it as base64.
+    This is a CPU/IO-bound function and must be called via asyncio.to_thread.
     """
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         if len(doc) == 0:
             raise ValueError("File PDF không chứa trang nào.")
-        # Render the first page
-        page = doc[0]
+        page = doc[0]  # Only render the first page
         pix = page.get_pixmap(dpi=150)  # 150 DPI is balanced for quality and size
         image_bytes = pix.tobytes("jpg")
-        base64_str = base64.b64encode(image_bytes).decode("utf-8")
-        return base64_str
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+
+async def pdf_to_base64_image(file_bytes: bytes) -> str:
+    """
+    [Async] Renders the first page of the PDF to a JPEG image and returns the base64 string.
+    Uses asyncio.to_thread to avoid blocking the FastAPI event loop during heavy rendering.
+    Raises ValueError if the PDF exceeds MAX_PDF_BYTES.
+    """
+    if len(file_bytes) > MAX_PDF_BYTES:
+        raise ValueError(f"File PDF vượt quá giới hạn kích thước cho phép ({MAX_PDF_BYTES // 1024 // 1024} MB).")
+    return await asyncio.to_thread(_render_pdf_to_base64, file_bytes)
+
 
 async def analyze_document_with_ai(image_base64: str) -> ExtractedDocument:
     """

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
 import { 
@@ -24,7 +24,9 @@ import {
   Mail,
   Check,
   Clock,
-  HelpCircle
+  HelpCircle,
+  Terminal,
+  ChevronDown
 } from "lucide-react";
 
 interface ExtractedDoc {
@@ -84,6 +86,11 @@ export default function Home() {
     port_of_loading: "HAIPHONG PORT"
   });
 
+  // SWIFT Parsing Mode State
+  const [lcInputMode, setLcInputMode] = useState<"form" | "swift">("form");
+  const [swiftText, setSwiftText] = useState("");
+  const [isParsingSwift, setIsParsingSwift] = useState(false);
+
   // Files State
   const [file, setFile] = useState<File | null>(null);
   
@@ -92,6 +99,10 @@ export default function Home() {
   const [loadingStep, setLoadingStep] = useState("");
   const [result, setResult] = useState<CheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Live Terminal Logs from Backend Streaming
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const terminalEndRef = useRef<HTMLDivElement>(null);
 
   // Editable state (HITL)
   const [extractedDoc, setExtractedDoc] = useState<ExtractedDoc | null>(null);
@@ -109,6 +120,11 @@ export default function Home() {
 
   // Copy email status
   const [copied, setCopied] = useState(false);
+
+  // Auto-scroll terminal
+  useEffect(() => {
+    terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [terminalLogs]);
 
   // Add Log to Audit Trail
   const addAuditLog = useCallback((msg: string, type: "info" | "success" | "warning" | "edit") => {
@@ -154,7 +170,7 @@ export default function Home() {
           expected_value: `Trước hoặc bằng ${lcTerms.latest_shipment}`,
           reason: `Ngày giao hàng thực tế (${updatedExt.shipment_date}) muộn hơn thời hạn giao hàng của L/C (${lcTerms.latest_shipment})`,
           severity: "Error"
-        });
+      });
       }
     }
 
@@ -189,6 +205,41 @@ export default function Home() {
     setLcTerms(prev => ({ ...prev, [name]: value }));
   };
 
+  // Call API to Parse SWIFT MT700
+  const handleParseSwift = async () => {
+    if (!swiftText.trim()) {
+      alert("Vui lòng dán văn bản điện SWIFT MT700 vào trước.");
+      return;
+    }
+
+    setIsParsingSwift(true);
+    addAuditLog("Bắt đầu gọi AI phân tích điện SWIFT MT700...", "info");
+    try {
+      const response = await axios.post("http://localhost:8000/api/v1/parse-swift", {
+        swift_text: swiftText
+      });
+      
+      if (response.data.status === "success" && response.data.lc_terms) {
+        const terms = response.data.lc_terms;
+        setLcTerms({
+          max_amount: terms.max_amount.toString(),
+          currency: terms.currency,
+          latest_shipment: terms.latest_shipment,
+          beneficiary_name: terms.beneficiary_name,
+          port_of_loading: terms.port_of_loading
+        });
+        setLcInputMode("form");
+        addAuditLog("Giải mã điện SWIFT MT700 và điền tự động tham chiếu L/C thành công!", "success");
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Không thể giải mã điện SWIFT. Vui lòng kiểm tra lại kết nối backend hoặc key.");
+      addAuditLog("Giải mã điện SWIFT thất bại.", "warning");
+    } finally {
+      setIsParsingSwift(false);
+    }
+  };
+
   // Dropzone setup
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
@@ -205,7 +256,7 @@ export default function Home() {
     multiple: false
   });
 
-  // Submit check request to FastAPI
+  // Submit check request to FastAPI using Streaming Fetch Reader
   const handleCheck = async () => {
     if (!file) {
       setError("Vui lòng tải lên file PDF chứng từ cần đối chiếu.");
@@ -217,42 +268,83 @@ export default function Home() {
     setError(null);
     setExtractedDoc(null);
     setDiscrepancyList([]);
+    setTerminalLogs([]);
+
+    const addTerminalLog = (msg: string) => {
+      const t = new Date().toLocaleTimeString();
+      setTerminalLogs(prev => [...prev, `[${t}] ${msg}`]);
+    };
 
     try {
-      setLoadingStep("1. Đang quét cấu trúc tài liệu PDF...");
-      await new Promise(r => setTimeout(r, 1200)); 
-      
-      setLoadingStep("2. Đang kết nối AI Engine Vision (Agent 1)...");
-      await new Promise(r => setTimeout(r, 1200));
-
-      setLoadingStep("3. Đang thực hiện kiểm duyệt chéo và rà soát lỗi (Agent 2)...");
-      await new Promise(r => setTimeout(r, 1200));
-
-      setLoadingStep("4. Đang đối chiếu luật nghiệp vụ UCP 600...");
-      await new Promise(r => setTimeout(r, 800));
-
       const formData = new FormData();
       formData.append("pdf_file", file);
       formData.append("lc_rules", JSON.stringify(lcTerms));
 
-      const response = await axios.post("http://localhost:8000/api/v1/check-lc", formData, {
-        headers: { "Content-Type": "multipart/form-data" }
+      addTerminalLog("Khởi tạo yêu cầu phân tích chứng từ...");
+
+      // Call streaming API
+      const response = await fetch("http://localhost:8000/api/v1/check-lc", {
+        method: "POST",
+        body: formData
       });
 
-      setResult(response.data);
-      setExtractedDoc(response.data.extracted);
-      setDiscrepancyList(response.data.discrepancies);
-      
-      addAuditLog("Hoàn tất bóc tách & kiểm toán chéo dữ liệu qua Multi-Agent (Agent 1 & Agent 2)", "success");
-      if (response.data.discrepancies.length > 0) {
-        addAuditLog(`Đối chiếu hoàn tất: Phát hiện ${response.data.discrepancies.length} bất hợp lệ. AI đã tự soạn thư xin vướng mắc (Waiver Letter)`, "warning");
-      } else {
-        addAuditLog("Đối chiếu hoàn tất: Bộ chứng từ tuân thủ tuyệt đối điều khoản L/C", "success");
+      if (!response.body) {
+        throw new Error("Không thể khởi tạo kết nối luồng (stream response).");
       }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let resData: CheckResult | null = null;  // Hoisted so accessible after stream ends
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // Keep the last partial line in the buffer
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const payload = JSON.parse(line);
+            if (payload.type === "progress") {
+              setLoadingStep(payload.msg);
+              addTerminalLog(payload.msg);
+            } else if (payload.type === "error") {
+              setError(payload.msg);
+              addTerminalLog(`[LỖI] ${payload.msg}`);
+              throw new Error(payload.msg);
+            } else if (payload.type === "result") {
+              resData = payload.data as CheckResult;
+              setResult(resData);
+              setExtractedDoc(resData.extracted);
+              setDiscrepancyList(resData.discrepancies);
+              addTerminalLog("AI Engine đã bóc tách dữ liệu và hoàn tất kiểm toán chéo.");
+              addTerminalLog("Đối chiếu UCP 600 thành công.");
+            }
+          } catch (e) {
+            console.error("JSON parse error on stream chunk:", e);
+          }
+        }
+      }
+
+      addAuditLog("Hoàn tất bóc tách & kiểm toán chéo dữ liệu qua Multi-Agent (Agent 1 & Agent 2)", "success");
+
+      // NOTE: Use local variable resData, NOT `result` state — state update is async
+      //       and `result` would be stale (null) immediately after setResult() is called.
+      if (resData && resData.discrepancies.length > 0) {
+        addAuditLog(`Đối chiếu hoàn tất: Phát hiện ${resData.discrepancies.length} bất hợp lệ. AI đã tự soạn thư xin vướng mắc (Waiver Letter)`, "warning");
+      } else if (resData) {
+        addAuditLog("Đối chiếu hoàn tất: Chứng từ hợp lệ toàn phần với điều khoản L/C!", "success");
+      }
+
     } catch (err: any) {
       console.error(err);
       setError(
-        err.response?.data?.detail || 
+        err.message || 
         "Đã xảy ra lỗi khi kết nối với máy chủ API. Hãy đảm bảo Backend (FastAPI) đang chạy tại port 8000."
       );
       addAuditLog("Quá trình bóc tách lỗi: Có lỗi xảy ra trong kết nối máy chủ API", "warning");
@@ -411,90 +503,145 @@ export default function Home() {
         <section className="lg:col-span-5 flex flex-col gap-6">
           {/* L/C Requirements Card */}
           <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md">
-            <div className="flex items-center gap-2 mb-4 border-b border-slate-100 pb-3">
-              <FileText className="text-blue-700 h-5 w-5" />
-              <h2 className="text-md font-bold text-blue-900">1. Điều khoản L/C tham chiếu</h2>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <FileText className="text-blue-700 h-5 w-5" />
+                <h2 className="text-md font-bold text-blue-900">1. Cấu hình L/C tham chiếu</h2>
+              </div>
+              
+              {/* Toggle Input Mode */}
+              <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button
+                  onClick={() => setLcInputMode("form")}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                    lcInputMode === "form" ? "bg-white text-blue-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Nhập Form
+                </button>
+                <button
+                  onClick={() => setLcInputMode("swift")}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                    lcInputMode === "swift" ? "bg-white text-blue-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Bức điện SWIFT
+                </button>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-1 gap-4">
-              <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">Tên người thụ hưởng (Beneficiary)</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    name="beneficiary_name"
-                    value={lcTerms.beneficiary_name}
-                    onChange={handleInputChange}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
-                    placeholder="E.g., GLOBAL TRADING CORP"
+
+            {lcInputMode === "swift" ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs text-slate-500 font-bold mb-1.5 block">Dán văn bản điện SWIFT MT700 nguyên bản:</label>
+                  <textarea
+                    rows={6}
+                    value={swiftText}
+                    onChange={(e) => setSwiftText(e.target.value)}
+                    placeholder=":31D: Date and Place of Expiry: 260630\n:50: Applicant: IMPORT CO\n:59: Beneficiary:\nGLOBAL TRADING CORP\n:32B: Currency Code, Amount: USD 50000\n:44E: Port of Loading: HAIPHONG PORT"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all leading-normal"
                   />
                 </div>
+                
+                <button
+                  onClick={handleParseSwift}
+                  disabled={isParsingSwift}
+                  className="w-full py-2.5 rounded-xl bg-blue-900 hover:bg-blue-950 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {isParsingSwift ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Đang phân tích điện SWIFT...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cpu className="h-3.5 w-3.5" />
+                      <span>AI Tự Động Phân Tích L/C</span>
+                    </>
+                  )}
+                </button>
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
                 <div>
-                  <label className="text-xs text-slate-500 font-bold mb-1 block">Hạn mức tối đa</label>
+                  <label className="text-xs text-slate-500 font-bold mb-1 block">Tên người thụ hưởng (Beneficiary)</label>
                   <div className="relative">
-                    <DollarSign className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                    <input
-                      type="number"
-                      name="max_amount"
-                      value={lcTerms.max_amount}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
-                      placeholder="E.g., 50000"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-500 font-bold mb-1 block">Đơn vị tiền tệ (Currency)</label>
-                  <div className="relative">
-                    <Globe className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <User className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                     <input
                       type="text"
-                      name="currency"
-                      value={lcTerms.currency}
+                      name="beneficiary_name"
+                      value={lcTerms.beneficiary_name}
                       onChange={handleInputChange}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
-                      placeholder="E.g., USD"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-slate-500 font-bold mb-1 block">Hạn cuối giao hàng</label>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                    <input
-                      type="date"
-                      name="latest_shipment"
-                      value={lcTerms.latest_shipment}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
+                      placeholder="E.g., GLOBAL TRADING CORP"
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-500 font-bold mb-1 block">Cảng bốc hàng (Port of Loading)</label>
-                  <div className="relative">
-                    <Anchor className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                    <input
-                      type="text"
-                      name="port_of_loading"
-                      value={lcTerms.port_of_loading}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
-                      placeholder="E.g., HAIPHONG PORT"
-                    />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-slate-500 font-bold mb-1 block">Hạn mức tối đa</label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                      <input
+                        type="number"
+                        name="max_amount"
+                        value={lcTerms.max_amount}
+                        onChange={handleInputChange}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
+                        placeholder="E.g., 50000"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-500 font-bold mb-1 block">Đơn vị tiền tệ (Currency)</label>
+                    <div className="relative">
+                      <Globe className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        name="currency"
+                        value={lcTerms.currency}
+                        onChange={handleInputChange}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
+                        placeholder="E.g., USD"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-slate-500 font-bold mb-1 block">Hạn cuối giao hàng</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                      <input
+                        type="date"
+                        name="latest_shipment"
+                        value={lcTerms.latest_shipment}
+                        onChange={handleInputChange}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-500 font-bold mb-1 block">Cảng bốc hàng (Port of Loading)</label>
+                    <div className="relative">
+                      <Anchor className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        name="port_of_loading"
+                        value={lcTerms.port_of_loading}
+                        onChange={handleInputChange}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all"
+                        placeholder="E.g., HAIPHONG PORT"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* PDF Document Upload Card */}
@@ -535,6 +682,7 @@ export default function Home() {
                       setExtractedDoc(null);
                       setDiscrepancyList([]);
                       setAuditLogs([]);
+                      setTerminalLogs([]);
                     }}
                     className="mt-4 text-xs font-semibold text-rose-600 hover:text-rose-500 underline"
                   >
@@ -557,7 +705,7 @@ export default function Home() {
             </div>
 
             {error && (
-              <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-100 text-rose-700 text-xs flex gap-2.5 items-start">
+              <div className="mt-4 p-3.5 rounded-xl bg-rose-550 border border-rose-100 text-rose-700 text-xs flex gap-2.5 items-start">
                 <XCircle className="h-4.5 w-4.5 shrink-0 mt-0.5" />
                 <span>{error}</span>
               </div>
@@ -586,6 +734,24 @@ export default function Home() {
         {/* Right column: Results & Sign Area */}
         <section className="lg:col-span-7 flex flex-col gap-6">
           
+          {/* Live Terminal logs panel */}
+          {terminalLogs.length > 0 && (
+            <div className="bg-slate-950 border border-slate-900 rounded-2xl p-4 shadow-xl">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 pb-2 border-b border-slate-900/60">
+                <Terminal className="h-4 w-4 text-emerald-400" />
+                <span>Trình giám sát tác nhân AI (Live Console)</span>
+              </div>
+              <div className="bg-slate-950/80 font-mono text-[10px] text-emerald-400 p-3 rounded-xl border border-slate-900 shadow-inner h-36 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-800">
+                {terminalLogs.map((log, index) => (
+                  <div key={index} className="leading-relaxed animate-[fadeIn_0.2s_ease-out]">
+                    {log}
+                  </div>
+                ))}
+                <div ref={terminalEndRef} />
+              </div>
+            </div>
+          )}
+
           {/* Waiting/Processing State */}
           {isLoading && (
             <div className="bg-white border border-blue-900/5 rounded-2xl p-12 shadow-md flex flex-col items-center justify-center text-center min-h-[480px]">
@@ -624,7 +790,7 @@ export default function Home() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
                   <div>
                     <h2 className="text-lg font-bold text-blue-900">Báo cáo sai biệt (Compliance Report)</h2>
-                    <p className="text-xs text-slate-500">Số hóa đơn: <span className="font-mono text-blue-700 font-bold">{extractedDoc.invoice_number || "N/A"}</span></p>
+                    <p className="text-xs text-slate-400">Số hóa đơn: <span className="font-mono text-blue-700 font-bold">{extractedDoc.invoice_number || "N/A"}</span></p>
                   </div>
                   <div className={`px-3.5 py-1.5 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
                     discrepancyList.length > 0

@@ -26,7 +26,7 @@ def pdf_to_base64_image(file_bytes: bytes) -> str:
 async def analyze_document_with_ai(image_base64: str) -> ExtractedDocument:
     """
     Agent 1 (Extractor): Uses GPT-4o Vision API to directly look at the document image,
-    run OCR, and parse data with quotes.
+    run OCR, and parse data with quotes and self-assessed confidence scores.
     """
     system_prompt = (
         "Bạn là chuyên gia bóc tách dữ liệu thanh toán quốc tế kiểm tra L/C (Agent 1).\n"
@@ -34,6 +34,8 @@ async def analyze_document_with_ai(image_base64: str) -> ExtractedDocument:
         "Đối với mỗi trường dữ liệu (ví dụ: invoice_number, total_amount...), bạn phải cung cấp:\n"
         "1. Giá trị trích xuất thực tế (total_amount phải là số thực, shipment_date định dạng YYYY-MM-DD).\n"
         "2. ĐOẠN TRÍCH DẪN GỐC (exact quote/snippet) chứa con số hoặc thông tin đó hiển thị trên ảnh để làm minh chứng.\n"
+        "3. ĐIỂM TIN CẬY (confidence score) từ 0.0 đến 1.0. Đánh giá thấp (dưới 0.8) nếu chữ bị mờ nhòe, bị dấu đóng đè lên, "
+        "hoặc thông tin mang tính chất suy đoán/không rõ ràng trên ảnh.\n"
         "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
     )
 
@@ -63,12 +65,14 @@ async def audit_extracted_document(image_base64: str, extracted: ExtractedDocume
     """
     Agent 2 (Auditor): Reviews the proposed extraction against the document image.
     Corrects any OCR typos, wrong numbers, stamps overlay issues, or date format errors.
+    Re-assesses and updates the confidence score if changes are made.
     """
     system_prompt = (
         "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra tài liệu thanh toán quốc tế (Agent 2).\n"
         "Nhiệm vụ: Bạn hãy nhận dữ liệu bóc tách được từ Agent 1 và đối chiếu kỹ lưỡng lại với hình ảnh chứng từ gốc.\n"
-        "Hãy kiểm tra xem các trích dẫn (quote) và giá trị tương ứng có khớp và chính xác 100% so với những gì hiển thị trên ảnh hay không.\n"
-        "Nếu phát hiện Agent 1 bóc tách sai lệch (ví dụ bị nhầm lẫn chữ số do mộc đỏ đóng đè hoặc mờ nhòe), bạn hãy tiến hành đính chính dữ liệu đó.\n"
+        "Hãy kiểm tra xem các trích dẫn (quote), giá trị và điểm tự tin (confidence) có khớp và chính xác 100% so với những gì hiển thị trên ảnh hay không.\n"
+        "Nếu phát hiện Agent 1 bóc tách sai lệch hoặc đánh giá sai độ tin cậy (ví dụ như chữ rất mờ nhưng Agent 1 để điểm tin cậy 1.0), "
+        "bạn hãy tiến hành đính chính dữ liệu và cập nhật lại điểm tự tin tương ứng.\n"
         "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc ExtractedDocument JSON."
     )
 

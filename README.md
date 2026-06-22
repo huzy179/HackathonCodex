@@ -2,34 +2,58 @@
 
 **Dự án tham dự Codex Community Hackathon — Hanoi 2026**
 - **Track mục tiêu:** Track 1 (Market Scale) & Track 2 (Engineering Depth)
-- **Công cụ cốt lõi:** Lập trình với Next.js (TypeScript) & FastAPI (Python), sử dụng mô hình GPT-4o Vision.
+- **Công nghệ cốt lõi:** Next.js 16 (React 19, Webpack, Tailwind CSS) & FastAPI (Python 3.11, PyMuPDF, OpenAI GPT-4o Vision).
+
+---
 
 ## 🎯 Vấn đề thực tế (The Problem)
-Trong thương mại quốc tế, Thanh toán bằng Thư tín dụng (L/C - Letter of Credit) là phương thức an toàn nhưng cực kỳ rườm rà. Theo quy tắc UCP 600, các ngân hàng áp dụng nguyên tắc **"Tuân thủ nghiêm ngặt" (Strict Compliance)**. Một lỗi nhỏ (typo) cũng có thể dẫn đến việc từ chối thanh toán lô hàng hàng triệu USD. 
-Hiện nay, kiểm soát viên phải đối chiếu bằng mắt hàng chục trang PDF với L/C gốc, tốn 3–5 ngày làm việc và dễ xảy ra sai sót do con người (Human Error) đặc biệt khi các hóa đơn, vận đơn bị scan mờ hoặc đóng dấu đỏ đè lên chữ.
+Trong thương mại quốc tế, Thanh toán bằng Thư tín dụng (L/C - Letter of Credit) là phương thức thanh toán an toàn nhất nhưng cũng rườm rà nhất. Theo quy tắc UCP 600, các ngân hàng phải áp dụng nguyên tắc **"Tuân thủ nghiêm ngặt" (Strict Compliance)**. 
+Hiện nay, kiểm soát viên thanh toán quốc tế phải đối chiếu bằng mắt hàng chục trang PDF chứng từ (Hóa đơn, vận đơn...) với L/C gốc để rà soát từng dấu chấm, dấu phẩy. Một lỗi nhỏ (typo) hoặc việc bóc tách sai số liệu do mộc đỏ đóng đè lên chữ (trên bản scan) có thể làm chậm trễ hoặc từ chối thanh toán lô hàng trị giá hàng triệu USD. Quá trình đối chiếu thủ công này thường:
+- Tốn kém thời gian (mất từ 3 đến 5 ngày làm việc).
+- Áp lực cao, dễ xảy ra sai sót do con người (Human Error).
+
+---
 
 ## 💡 Giải pháp (The Solution)
-**LC-Vision** là hệ thống tự động hóa việc đối chiếu chứng từ bằng Generative AI với độ chính xác cao nhờ kiến trúc Multi-Agent và hỗ trợ can thiệp thủ công (Human-in-the-Loop). Hệ thống render PDF thành hình ảnh JPG và nạp trực tiếp vào GPT-4o Vision để tự OCR, đối chiếu tự động và trả về báo cáo sai sót chỉ trong vài giây.
+**LC-Vision** là hệ thống tự động hóa việc đối chiếu chứng từ bằng Generative AI có khả năng xử lý các loại PDF (kể cả bản scan ảnh) nhờ công nghệ **GPT-4o Vision** kết hợp luồng kiểm duyệt chéo **Multi-Agent Review** và cơ chế can thiệp thủ công **Human-in-the-Loop** an toàn, tin cậy. Hệ thống bóc tách, so khớp và trả về **Báo cáo sai biệt (Compliance Report)** chỉ trong vài giây.
 
-## ✨ Tính năng nổi bật
-1. **Multi-Agent Review & GPT-4o Vision:** Xử lý qua 2 Agent độc lập nhìn trực tiếp hình ảnh chứng từ:
-   - *Agent 1 (Extractor):* Sử dụng GPT-4o Vision đọc ảnh base64 được render từ trang đầu PDF qua `PyMuPDF` để tự động chạy OCR và bóc tách dữ liệu kèm trích dẫn gốc.
-   - *Agent 2 (Auditor):* Kiểm toán viên độc lập rà soát chéo dữ liệu của Agent 1 với hình ảnh tài liệu gốc để đính chính các lỗi nhầm lẫn OCR trước khi đối chiếu.
-2. **Explainable AI (Quotes):** Hiển thị minh chứng gốc dưới mỗi giá trị thực tế giúp chuyên viên dễ dàng xác minh nguồn dữ liệu bóc tách từ đâu trong văn bản PDF.
-3. **Automated Discrepancy Checking:** Chạy các luật nghiệp vụ tự động đối chiếu các điều khoản L/C (Người thụ hưởng, số tiền, ngày giao hàng, tiền tệ, cảng bốc...).
-4. **Human-in-the-Loop (HITL):** Cho phép người dùng chỉnh sửa trực tiếp giá trị bóc tách sai trên bảng đối chiếu. Hệ thống sẽ tự động so khớp lại theo thời gian thực và chuyển trạng thái từ đỏ sang xanh khi khớp.
-5. **Auto-Waiver Drafter (Trợ lý tự hành):** Tự động soạn thảo email/SWIFT MT799 xin chấp nhận lỗi (Waiver Request) song ngữ Anh-Việt khi phát hiện có sai lệch trên chứng từ.
-6. **Audit Trail (Nhật ký vận hành):** Ghi nhận dòng thời gian hoạt động chi tiết (từ lúc tải lên, hoàn thành bóc tách, chuyên viên chỉnh sửa thủ công đến lúc ký duyệt) đáp ứng tiêu chuẩn ngân hàng.
-7. **SmartCA Mock Sign:** Tích hợp nút giả lập ký duyệt báo cáo qua cổng VNPT SmartCA kèm mã băm giao dịch (TxHash) bảo mật.
+---
 
-## 🚀 Hướng dẫn Chạy Dự Án
+## ✨ Tính năng nổi bật của dự án
 
-### Chạy bằng Docker (Khuyến nghị)
-1. Copy file `.env.example` thành `.env`:
+### 1. Luồng Thẩm Định Đa Tác Nhân (Multi-Agent Review)
+Nhằm tăng độ chính xác tuyệt đối, tránh hiện tượng ảo giác của AI, hệ thống chia làm 2 giai đoạn:
+- **Agent 1 (Extractor):** Sử dụng GPT-4o Vision phân tích trực tiếp hình ảnh trang PDF được chuyển đổi từ RAM, tiến hành OCR thô, bóc tách thông tin và đính kèm đoạn văn bản trích dẫn làm minh chứng.
+- **Agent 2 (Auditor):** Đóng vai trò là Kiểm toán viên độc lập. Agent 2 nhận dữ liệu đề xuất từ Agent 1 và rà soát lại trực tiếp trên hình ảnh gốc để phát hiện, đính chính các lỗi sai lệch chữ số trước khi gửi đi đối chiếu.
+
+### 2. Minh chứng AI minh bạch (Explainable AI)
+Dưới mỗi trường thông tin thực tế bóc tách được, hệ thống hiển thị chính xác đoạn trích xuất gốc từ văn bản PDF (Ví dụ: *Trích dẫn gốc: "Invoice No: INV-2026/08"*). Điều này giúp kiểm soát viên ngân hàng ngay lập tức định vị và xác minh tính đúng đắn của dữ liệu bóc tách mà không cần đọc lại toàn bộ trang giấy.
+
+### 3. Chỉ số tin cậy & AI có trách nhiệm (Confidence Score)
+AI tự chấm điểm độ tự tin (Confidence Score từ 0% đến 100%) dựa trên độ rõ nét của chữ trên ảnh. Nếu chỉ số tự tin `< 80%` (ví dụ do mộc đỏ che khuất chữ), hệ thống sẽ nhấp nháy một nhãn cảnh báo **"⚠️ Kiểm tra lại"** ngay bên cạnh trường dữ liệu để báo hiệu con người cần thẩm định lại.
+
+### 4. Can thiệp thủ công thời gian thực (Human-in-the-Loop)
+Chuyên viên ngân hàng có thể click trực tiếp vào nút chỉnh sửa kế bên ô dữ liệu thực tế để sửa đổi. Khi lưu lại, hệ thống lập tức tự động đối chiếu lại theo thời gian thực và chuyển đổi trạng thái dòng đó từ Đỏ (Sai lệch) sang Xanh (Pass) khi thông tin khớp L/C, đồng thời đưa điểm tin cậy lên 100% (đã xác thực bởi con người).
+
+### 5. Soạn thảo thư từ vướng mắc tự động (Auto-Waiver Drafter)
+Khi phát hiện chứng từ có lỗi, hệ thống tự động gọi GPT-4o biên soạn một bức thư/Email song ngữ (Anh - Việt) chuyên nghiệp gửi cho người mua yêu cầu ký nhận đồng ý thanh toán bỏ qua lỗi (Waiver Letter), khép kín luồng tương tác nghiệp vụ.
+
+### 6. Nhật ký vận hành (Audit Trail)
+Mọi hành động (Upload file, AI bóc tách đa tác nhân, sửa đổi tay thủ công, ký duyệt) đều được hệ thống ghi nhận thời gian thực và hiển thị dưới dạng Timeline lịch sử ở cuối trang, đảm bảo tính minh bạch kiểm toán trong ngành tài chính.
+
+### 7. Giả lập chữ ký số SmartCA
+Cho phép người dùng thực hiện ký duyệt trực tuyến thông qua cổng kết nối VNPT SmartCA giả lập trong 2.5 giây, trả về mã giao dịch băm (TxHash) mã hóa độc bản.
+
+---
+
+## 🚀 Hướng dẫn Cài đặt & Khởi chạy nhanh
+
+### Khởi chạy bằng Docker Compose (Khuyến nghị)
+1. Tạo file `.env` từ file `.env.example`:
    ```bash
    cp .env.example .env
    ```
-2. Mở file `.env` ra và điền API Key thật của bạn:
+2. Mở file `.env` ra và cấu hình mã API Key của bạn:
    ```env
    OPENAI_API_KEY=sk-proj-xxxxxx...
    ```
@@ -37,7 +61,7 @@ Hiện nay, kiểm soát viên phải đối chiếu bằng mắt hàng chục t
    ```bash
    docker compose up --build -d
    ```
-4. Truy cập giao diện tại: `http://localhost:3000` (API Backend chạy tại `http://localhost:8000`).
+4. Truy cập giao diện ứng dụng tại: `http://localhost:3000` (API Backend chạy tại `http://localhost:8000`).
 
-### Chạy Local (Không qua Docker)
-Chi tiết xem tại tài liệu [Architecture.md](file:///c:/Users/maitr/OneDrive/Máy tính/LC/Architecture.md).
+### Khởi chạy thủ công (Chạy local từng phần)
+Chi tiết cấu hình chạy local Python venv và Next.js dev server xem thêm tại hướng dẫn chi tiết của tệp [Architecture.md](file:///c:/Users/maitr/OneDrive/Máy tính/LC/Architecture.md).

@@ -1,0 +1,24 @@
+# API Keys and Environment Secrets
+.env
+.env.local
+.env.*.local
+
+# Python/Backend dependencies
+backend/venv/
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Node/Frontend dependencies & builds
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db

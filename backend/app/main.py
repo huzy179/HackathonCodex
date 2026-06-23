@@ -67,7 +67,7 @@ async def check_lc(
             yield json.dumps({"type": "progress", "msg": "2. Đang render PDF thành ảnh JPEG base64 (PyMuPDF)..."}) + "\n"
             await asyncio.sleep(0.4)
             try:
-                image_base64 = pdf_to_base64_image(file_bytes)
+                image_base64 = await pdf_to_base64_image(file_bytes)  # MUST await — async since to_thread refactor
             except Exception as e:
                 yield json.dumps({"type": "error", "msg": f"Không thể render PDF thành ảnh: {str(e)}"}) + "\n"
                 return

@@ -25,8 +25,7 @@ import {
   Check,
   Clock,
   HelpCircle,
-  Terminal,
-  ChevronDown
+  Terminal
 } from "lucide-react";
 
 interface ExtractedDoc {
@@ -314,9 +313,14 @@ export default function Home() {
               setLoadingStep(payload.msg);
               addTerminalLog(payload.msg);
             } else if (payload.type === "error") {
+              // Set error state and stop reading — do NOT throw inside inner catch
+              // because thrown Error here is caught by the inner catch(e) below,
+              // NOT by the outer catch(err), causing loading state to never reset.
               setError(payload.msg);
               addTerminalLog(`[LỖI] ${payload.msg}`);
-              throw new Error(payload.msg);
+              setIsLoading(false);
+              setLoadingStep("");
+              return;  // Exit handleCheck early
             } else if (payload.type === "result") {
               resData = payload.data as CheckResult;
               setResult(resData);
@@ -325,8 +329,9 @@ export default function Home() {
               addTerminalLog("AI Engine đã bóc tách dữ liệu và hoàn tất kiểm toán chéo.");
               addTerminalLog("Đối chiếu UCP 600 thành công.");
             }
-          } catch (e) {
-            console.error("JSON parse error on stream chunk:", e);
+          } catch (parseErr) {
+            // Only catch JSON parse errors, not logic errors
+            console.warn("Skipping malformed stream chunk:", parseErr);
           }
         }
       }
@@ -427,7 +432,9 @@ export default function Home() {
   const getFieldStatus = (fieldName: string) => {
     if (!extractedDoc) return null;
     const disc = getDiscrepancy(fieldName);
-    const confidence = (extractedDoc[`${fieldName}_confidence` as keyof ExtractedDoc] as number) || 1.0;
+    // IMPORTANT: Use ?? not || to avoid treating 0.0 confidence as falsy
+    // confidence=0.0 means AI did not see the field — we MUST show 0% not 100%
+    const confidence = (extractedDoc[`${fieldName}_confidence` as keyof ExtractedDoc] as number) ?? 0.0;
     
     if (disc) {
       return {

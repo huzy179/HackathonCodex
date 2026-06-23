@@ -17,8 +17,8 @@ Hệ thống áp dụng mô hình phân tách độc lập (Frontend và Backend
 └─────────────────────────────────┘        └─────────────────────────────────┘
 ```
 
-*   **Frontend (Next.js 16 + TypeScript + Tailwind CSS):** Đảm nhiệm vai trò giao diện hiển thị sáng mang phong cách Xanh Navy Ngân hàng, kéo thả upload tài liệu, can thiệp thủ công (HITL) thay đổi giá trị trực tiếp trên bảng, và lưu trữ nhật ký hoạt động (Audit Trail). Chạy trên nền trình biên dịch **Webpack** (qua cờ `--webpack`) để khắc phục lỗi phân tách ký tự tiếng Việt có dấu của Turbopack trên môi trường Windows.
-*   **Backend (FastAPI + Pydantic + Uvicorn):** Đảm nhận vai trò xử lý nghiệp vụ, chuyển đổi PDF trực tiếp từ bộ nhớ RAM sang ảnh JPEG base64 qua thư viện `PyMuPDF` (fitz) và điều phối các tác nhân AI độc lập.
+*   **Frontend (Next.js 16 + TypeScript + Tailwind CSS):** Đảm nhiệm vai trò giao diện hiển thị sáng mang phong cách Xanh Navy Ngân hàng, kéo thả upload tài liệu, can thiệp thủ công (HITL) thay đổi giá trị trực tiếp trên bảng, và hiển thị nhật ký hoạt động đồng bộ trực tiếp từ CSDL Backend. Chạy trên nền trình biên dịch **Webpack** (qua cờ `--webpack`) để khắc phục lỗi phân tách ký tự tiếng Việt có dấu của Turbopack trên môi trường Windows.
+*   **Backend (FastAPI + Pydantic + SQLite + Uvicorn):** Đảm nhận vai trò xử lý nghiệp vụ, tự động quét tìm trang hóa đơn tối ưu nhất trong tệp PDF nhiều trang để render ảnh JPEG base64 qua `PyMuPDF` (fitz), điều phối các tác nhân AI độc lập (với cơ chế tối ưu bỏ qua kiểm toán nếu độ tin cậy của Agent 1 cao), và lưu trữ lịch sử hoạt động lâu dài qua CSDL SQLite.
 
 ---
 
@@ -36,21 +36,26 @@ sequenceDiagram
     User->>FE: Upload PDF Hóa đơn & Nhập điều khoản L/C
     FE->>BE: POST /api/v1/check-lc (FormData)
     Note over BE: Khởi tạo luồng bytes PDF trong RAM
-    Note over BE: Chuyển đổi PDF thành ảnh base64 (PyMuPDF)
+    Note over BE: Quét các trang PDF tìm trang chứa nhiều từ khóa hóa đơn nhất
+    Note over BE: Chuyển đổi trang PDF được chọn thành ảnh base64 (PyMuPDF)
     BE->>AG1: Yêu cầu bóc tách hình ảnh
     AG1->>OpenAI: Gửi ảnh base64 bóc tách kèm quotes & confidence
     OpenAI-->>AG1: Trả về ExtractedDocument đề xuất
-    BE->>AG2: Yêu cầu kiểm toán rà soát chéo
-    AG2->>OpenAI: Gửi ảnh base64 và ExtractedDocument đề xuất để check
-    OpenAI-->>AG2: Trả về ExtractedDocument đã đính chính
+    alt Nếu bất kỳ trường nào có độ tự tin < 85%
+        BE->>AG2: Yêu cầu kiểm toán rà soát chéo
+        AG2->>OpenAI: Gửi ảnh base64 và ExtractedDocument đề xuất để check
+        OpenAI-->>AG2: Trả về ExtractedDocument đã đính chính
+    else Nếu tất cả các trường có độ tự tin >= 85%
+        Note over BE: Tối ưu hóa: Bỏ qua Agent 2 để tăng tốc & giảm chi phí
+    end
     Note over BE: Chạy so khớp nghiệp vụ (compare_lc)
     Note over BE: Gọi sinh thư xin vướng mắc (generate_waiver_draft)
     BE-->>FE: Trả về kết quả đối chiếu & email nháp
-    Note over FE: Hiển thị lỗi, trích dẫn gốc & điểm tự tin AI
+    Note over FE: Hiển thị lỗi, trích dẫn gốc & điểm tin cậy AI
     User->>FE: Chỉnh sửa tay thủ công nếu phát hiện AI sai (HITL)
     Note over FE: Frontend tự động so khớp lại & đổi màu pastel tương ứng
     User->>FE: Ký duyệt báo cáo (VNPT SmartCA)
-    Note over FE: Ghi nhận nhật ký Audit Trail & hiển thị thư nháp Waiver
+    Note over FE: Ghi nhận và gửi nhật ký Audit Trail lưu trữ SQLite lâu dài ở Backend
 ```
 
 ---
@@ -94,9 +99,10 @@ LC/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py          # Route chính tiếp nhận API /api/v1/check-lc
-│   │   ├── schemas.py       # Định nghĩa Pydantic Schema cho dữ liệu và lỗi
-│   │   └── services.py      # Render PDF thô sang ảnh, luồng Multi-Agent AI
+│   │   ├── database.py      # Quản lý cơ sở dữ liệu SQLite lưu trữ Audit Trail [NEW]
+│   │   ├── main.py          # Route chính tiếp nhận API /api/v1/check-lc & Audit Trail
+│   │   ├── schemas.py       # Định nghĩa Pydantic Schema cho dữ liệu, lỗi & Audit Trail
+│   │   └── services.py      # Quét trang PDF tối ưu, render ảnh, luồng Agent AI
 │   ├── .dockerignore        # Bỏ qua venv và pycache khi dựng container
 │   ├── Dockerfile           # Đóng gói backend (Python 3.11-slim)
 │   └── requirements.txt     # Các dependency backend (fastapi, uvicorn, pymupdf...)

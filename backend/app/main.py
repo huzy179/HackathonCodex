@@ -5,9 +5,10 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from .schemas import CheckLCResponse
+from .schemas import CheckLCResponse, AuditLogSchema
 from .services import pdf_to_base64_image, analyze_document_with_ai, audit_extracted_document, compare_lc, generate_waiver_draft
 from .swift_parser import parse_swift_mt700
+from .database import init_db, add_audit_log, get_audit_logs, clear_audit_logs
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
 class SWIFTInput(BaseModel):
     swift_text: str
 
 @app.get("/")
 def read_root():
     return {"message": "Welcome to LC-Vision API"}
+
+@app.get("/api/v1/audit-trail", response_model=list[AuditLogSchema])
+def get_audit_trail():
+    try:
+        return get_audit_logs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/audit-trail")
+def post_audit_trail(log: AuditLogSchema):
+    try:
+        add_audit_log(log.time, log.message, log.type)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/v1/audit-trail")
+def delete_audit_trail():
+    try:
+        clear_audit_logs()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/parse-swift")
 async def parse_swift(input_data: SWIFTInput):
@@ -64,10 +92,11 @@ async def check_lc(
                 return
 
             # 2. Render PDF to base64 image
-            yield json.dumps({"type": "progress", "msg": "2. Đang render PDF thành ảnh JPEG base64 (PyMuPDF)..."}) + "\n"
+            yield json.dumps({"type": "progress", "msg": "2. Đang tự động quét tìm trang tối ưu trong PDF..."}) + "\n"
             await asyncio.sleep(0.4)
             try:
-                image_base64 = await pdf_to_base64_image(file_bytes)  # MUST await — async since to_thread refactor
+                image_base64, selected_page_idx, total_pages = await pdf_to_base64_image(file_bytes)
+                yield json.dumps({"type": "progress", "msg": f"2. Đã tự động chọn trang {selected_page_idx + 1}/{total_pages} (chứa nhiều thông tin hóa đơn nhất) để render ảnh JPEG base64 (PyMuPDF)..."}) + "\n"
             except Exception as e:
                 yield json.dumps({"type": "error", "msg": f"Không thể render PDF thành ảnh: {str(e)}"}) + "\n"
                 return
@@ -81,14 +110,29 @@ async def check_lc(
                 return
 
             # 3.1. Audit extracted document (Agent 2 - Independent Auditor)
-            yield json.dumps({"type": "progress", "msg": "4. Agent 2: Kiểm toán độc lập đang đối chiếu chéo đính chính OCR (GPT-4o Vision)..."}) + "\n"
-            try:
-                audited_doc = await audit_extracted_document(image_base64, extracted_doc)
-            except Exception as e:
-                # Log the audit failure server-side but gracefully fall back to Agent 1 result
-                logger.warning("Agent 2 audit failed, falling back to Agent 1 result: %s", str(e))
-                yield json.dumps({"type": "progress", "msg": f"  [Cảnh báo] Agent 2 gặp lỗi, sử dụng kết quả Agent 1 (fallback): {str(e)[:120]}"}) + "\n"
+            confidence_fields = [
+                extracted_doc.invoice_number_confidence,
+                extracted_doc.total_amount_confidence,
+                extracted_doc.currency_confidence,
+                extracted_doc.shipment_date_confidence,
+                extracted_doc.port_of_loading_confidence,
+                extracted_doc.beneficiary_name_confidence
+            ]
+            needs_audit = any(conf < 0.85 for conf in confidence_fields)
+
+            if needs_audit:
+                yield json.dumps({"type": "progress", "msg": "4. Phát hiện độ tự tin bóc tách thấp (<85%), Agent 2: Kiểm toán độc lập đang đối chiếu chéo đính chính OCR (GPT-4o Vision)..."}) + "\n"
+                try:
+                    audited_doc = await audit_extracted_document(image_base64, extracted_doc)
+                except Exception as e:
+                    # Log the audit failure server-side but gracefully fall back to Agent 1 result
+                    logger.warning("Agent 2 audit failed, falling back to Agent 1 result: %s", str(e))
+                    yield json.dumps({"type": "progress", "msg": f"  [Cảnh báo] Agent 2 gặp lỗi, sử dụng kết quả Agent 1 (fallback): {str(e)[:120]}"}) + "\n"
+                    audited_doc = extracted_doc
+            else:
+                yield json.dumps({"type": "progress", "msg": "4. [Tối ưu hóa] Độ tự tin bóc tách của Agent 1 cao (>=85%), tự động bỏ qua Agent 2 để tăng tốc xử lý."}) + "\n"
                 audited_doc = extracted_doc
+                await asyncio.sleep(0.4)
 
             # 4. Compare audited data with L/C terms
             yield json.dumps({"type": "progress", "msg": "5. Đang chạy thuật toán đối chiếu luật nghiệp vụ UCP 600..."}) + "\n"

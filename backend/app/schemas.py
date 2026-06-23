@@ -62,3 +62,10 @@ class CheckLCResponse(BaseModel):
     extracted: ExtractedDocument
     discrepancies: List[Discrepancy]
     waiver_draft: Optional[str] = None
+
+
+class AuditLogSchema(BaseModel):
+    time: str
+    message: str
+    type: str
+

@@ -15,7 +15,7 @@ services:
         limits:
           memory: 512M  # Guard against OOM when rendering large PDFs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 15s
       timeout: 5s
       retries: 3

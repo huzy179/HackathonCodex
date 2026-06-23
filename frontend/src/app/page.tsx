@@ -112,6 +112,19 @@ export default function Home() {
   // Audit Logs (Audit Trail)
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
+  // Load Audit Logs from Backend on Mount
+  useEffect(() => {
+    const fetchAuditLogs = async () => {
+      try {
+        const response = await axios.get("http://localhost:8000/api/v1/audit-trail");
+        setAuditLogs(response.data);
+      } catch (err) {
+        console.error("Không thể tải Audit Trail từ Backend:", err);
+      }
+    };
+    fetchAuditLogs();
+  }, []);
+
   // Signing Modal State
   const [isSigning, setIsSigning] = useState(false);
   const [signStatus, setSignStatus] = useState<"connecting" | "signing" | "success" | "idle">("idle");
@@ -129,6 +142,13 @@ export default function Home() {
   const addAuditLog = useCallback((msg: string, type: "info" | "success" | "warning" | "edit") => {
     const timeStr = new Date().toLocaleTimeString();
     setAuditLogs(prev => [{ time: timeStr, message: msg, type }, ...prev]);
+    axios.post("http://localhost:8000/api/v1/audit-trail", {
+      time: timeStr,
+      message: msg,
+      type
+    }).catch(err => {
+      console.error("Không thể lưu Audit Log lên Backend:", err);
+    });
   }, []);
 
   // Recalculate discrepancies on client side for HITL
@@ -690,6 +710,9 @@ export default function Home() {
                       setDiscrepancyList([]);
                       setAuditLogs([]);
                       setTerminalLogs([]);
+                      axios.delete("http://localhost:8000/api/v1/audit-trail").catch(err => {
+                        console.error("Không thể xóa Audit Trail trên Backend:", err);
+                      });
                     }}
                     className="mt-4 text-xs font-semibold text-rose-600 hover:text-rose-500 underline"
                   >

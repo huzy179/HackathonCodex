@@ -14,25 +14,46 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-def _render_pdf_to_base64(file_bytes: bytes) -> str:
+def _render_pdf_to_base64(file_bytes: bytes) -> tuple[str, int, int]:
     """
-    [Sync] Renders the first page of a PDF to a JPEG image and encodes it as base64.
-    This is a CPU/IO-bound function and must be called via asyncio.to_thread.
+    [Sync] Scans PDF pages to find the best candidate (highest keyword count)
+    and renders that page to a JPEG image encoded in base64.
+    Returns a tuple of (base64_string, selected_page_idx, total_pages).
     """
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-        if len(doc) == 0:
+        total_pages = len(doc)
+        if total_pages == 0:
             raise ValueError("File PDF không chứa trang nào.")
-        page = doc[0]  # Only render the first page
+        
+        # Heuristic keywords for commercial invoices and shipping documents
+        keywords = ["invoice", "total amount", "beneficiary", "shipment date", "amount due", "hóa đơn", "tổng tiền", "người thụ hưởng", "port of loading"]
+        
+        best_page_idx = 0
+        max_keyword_count = -1
+        
+        # Scan up to 10 pages to avoid performance overhead on large files
+        num_pages_to_scan = min(total_pages, 10)
+        for i in range(num_pages_to_scan):
+            try:
+                text = doc[i].get_text().lower()
+                count = sum(1 for kw in keywords if kw in text)
+                if count > max_keyword_count:
+                    max_keyword_count = count
+                    best_page_idx = i
+            except Exception:
+                pass
+                
+        page = doc[best_page_idx]
         pix = page.get_pixmap(dpi=150)  # 150 DPI is balanced for quality and size
         image_bytes = pix.tobytes("jpg")
-        return base64.b64encode(image_bytes).decode("utf-8")
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        return image_base64, best_page_idx, total_pages
 
 
-async def pdf_to_base64_image(file_bytes: bytes) -> str:
+async def pdf_to_base64_image(file_bytes: bytes) -> tuple[str, int, int]:
     """
-    [Async] Renders the first page of the PDF to a JPEG image and returns the base64 string.
-    Uses asyncio.to_thread to avoid blocking the FastAPI event loop during heavy rendering.
-    Raises ValueError if the PDF exceeds MAX_PDF_BYTES.
+    [Async] Scans and renders the best page of the PDF to a JPEG image.
+    Returns (base64_string, selected_page_idx, total_pages).
     """
     if len(file_bytes) > MAX_PDF_BYTES:
         raise ValueError(f"File PDF vượt quá giới hạn kích thước cho phép ({MAX_PDF_BYTES // 1024 // 1024} MB).")

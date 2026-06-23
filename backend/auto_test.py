@@ -45,7 +45,7 @@ async def run_test_case(pdf_path: str, case_name: str):
 
     # Step 1: Render PDF to Base64 image
     print("[1/5] Converting PDF to image base64...")
-    image_base64 = await pdf_to_base64_image(file_bytes)  # MUST await — async function (uses asyncio.to_thread)
+    image_base64, _, _ = await pdf_to_base64_image(file_bytes)  # MUST await — async function (uses asyncio.to_thread)
     
 
     # Step 2: Agent 1 (Extraction)

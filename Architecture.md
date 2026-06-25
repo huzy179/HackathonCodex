@@ -1,6 +1,6 @@
-# 🏗️ Kiến trúc Hệ thống LC-Vision
+# 🏗️ Kiến trúc Hệ thống LC-Vision v2.0
 
-Tài liệu này mô tả chi tiết kiến trúc kỹ thuật của hệ thống kiểm tra chứng từ L/C bằng công nghệ AI đa phương thức (Vision), luồng xử lý dữ liệu kiểm toán đa tác nhân và cấu trúc thư mục dự án thực tế.
+Tài liệu này mô tả chi tiết kiến trúc kỹ thuật của hệ thống kiểm tra chứng từ L/C bằng công nghệ AI đa phương thức (Vision), luồng xử lý dữ liệu kiểm toán đa tác nhân trên nhiều tài liệu cùng lúc và cấu trúc thư mục dự án thực tế.
 
 ---
 
@@ -12,13 +12,14 @@ Hệ thống áp dụng mô hình phân tách độc lập (Frontend và Backend
 ┌─────────────────────────────────┐        ┌─────────────────────────────────┐
 │     Next.js 16 (Port 3000)      │ ◄────► │      FastAPI (Port 8000)        │
 │   - React 19 Client UI          │  HTTP  │   - Python 3.11 Backend Server  │
-│   - Real-time Recheck (HITL)    │        │   - PyMuPDF (PDF to Image)      │
-│   - Audit Trail & SmartCA Sign  │        │   - Multi-Agent AI (GPT-4o)     │
+│   - 3-Layer Validation Tabs     │        │   - PyMuPDF (PDF to Image)      │
+│   - Real-time Recheck (HITL)    │        │   - Multi-Document Extractor    │
+│   - Expiry Waiver Block         │        │   - Multi-Agent AI (GPT-4o)     │
 └─────────────────────────────────┘        └─────────────────────────────────┘
 ```
 
-*   **Frontend (Next.js 16 + TypeScript + Tailwind CSS):** Đảm nhiệm vai trò giao diện hiển thị sáng mang phong cách Xanh Navy Ngân hàng, kéo thả upload tài liệu, can thiệp thủ công (HITL) thay đổi giá trị trực tiếp trên bảng, và hiển thị nhật ký hoạt động đồng bộ trực tiếp từ CSDL Backend. Chạy trên nền trình biên dịch **Webpack** (qua cờ `--webpack`) để khắc phục lỗi phân tách ký tự tiếng Việt có dấu của Turbopack trên môi trường Windows.
-*   **Backend (FastAPI + Pydantic + SQLite + Uvicorn):** Đảm nhận vai trò xử lý nghiệp vụ, tự động quét tìm trang hóa đơn tối ưu nhất trong tệp PDF nhiều trang để render ảnh JPEG base64 qua `PyMuPDF` (fitz), điều phối các tác nhân AI độc lập (với cơ chế tối ưu bỏ qua kiểm toán nếu độ tin cậy của Agent 1 cao), và lưu trữ lịch sử hoạt động lâu dài qua CSDL SQLite.
+*   **Frontend (Next.js 16 + TypeScript + Tailwind CSS):** Giao diện chuyên nghiệp, hỗ trợ kéo thả upload nhiều chứng từ (Invoice, Bill of Lading, Packing List), bước Safety Gate duyệt điều khoản L/C, màn hình kết quả 3 Tab (Layer 1: Nội bộ, Layer 2: Đối chiếu chéo, Layer 3: So khớp L/C), và giả lập chấp nhận/từ chối Waiver của Khách hàng.
+*   **Backend (FastAPI + Pydantic + SQLite + Uvicorn):** Quét tìm trang chứng từ tối ưu, render ảnh JPEG base64 qua `PyMuPDF` (fitz), chạy song song bóc tách đa chứng từ qua Agent 1 (Extractor) và Agent 2 (Auditor). Thực hiện thuật toán thẩm định 3 Layer và tính toán cờ chặn Waiver tuyệt đối nếu L/C trễ hạn.
 
 ---
 
@@ -26,141 +27,65 @@ Hệ thống áp dụng mô hình phân tách độc lập (Frontend và Backend
 
 ```mermaid
 sequenceDiagram
-    actor User as Kiểm soát viên
+    actor Banker as Chuyên viên Ngân hàng
     participant FE as Next.js UI
     participant BE as FastAPI Server
     participant AG1 as Agent 1 (Extractor)
     participant AG2 as Agent 2 (Auditor)
     participant OpenAI as OpenAI (gpt-4o Vision)
 
-    User->>FE: Upload PDF Hóa đơn & Nhập điều khoản L/C
-    FE->>BE: POST /api/v1/check-lc (FormData)
-    Note over BE: Khởi tạo luồng bytes PDF trong RAM
-    Note over BE: Quét các trang PDF tìm trang chứa nhiều từ khóa hóa đơn nhất
-    Note over BE: Chuyển đổi trang PDF được chọn thành ảnh base64 (PyMuPDF)
-    BE->>AG1: Yêu cầu bóc tách hình ảnh
-    AG1->>OpenAI: Gửi ảnh base64 bóc tách kèm quotes & confidence
-    OpenAI-->>AG1: Trả về ExtractedDocument đề xuất
-    alt Nếu bất kỳ trường nào có độ tự tin < 85%
-        BE->>AG2: Yêu cầu kiểm toán rà soát chéo
-        AG2->>OpenAI: Gửi ảnh base64 và ExtractedDocument đề xuất để check
-        OpenAI-->>AG2: Trả về ExtractedDocument đã đính chính
-    else Nếu tất cả các trường có độ tự tin >= 85%
-        Note over BE: Tối ưu hóa: Bỏ qua Agent 2 để tăng tốc & giảm chi phí
+    Banker->>FE: Upload L/C PDF / Nhập SWIFT + Tải lên chứng từ
+    FE->>BE: /api/v1/extract-lc-file (Bóc tách L/C)
+    BE-->>FE: Trả về điều khoản L/C đề xuất
+    FE->>Banker: Hiển thị Safety Gate (Bước 3B) xác nhận L/C
+    Banker->>FE: Bấm "Xác nhận & Bắt đầu kiểm tra"
+    FE->>BE: POST /api/v1/check-lc (FormData gồm nhiều chứng từ + L/C rules)
+    Note over BE: Phân loại chứng từ (INVOICE, BILL_OF_LADING, PACKING_LIST)
+    Note over BE: Agent 1 bóc tách thông tin thô từng chứng từ kèm confidence
+    Note over BE: Agent 2 rà soát, kiểm toán rà soát chéo các trường có độ tin cậy thấp
+    Note over BE: Chạy 3 Layer Validation (Layer 1: Nội bộ, Layer 2: Chéo, Layer 3: L/C Compliance)
+    Note over BE: Nếu trễ hạn xuất trình so với Expiry Date -> Đánh dấu không được phép Waiver
+    BE-->>FE: Trả về CheckLCResponse (layer1_discrepancies, discrepancies, cross_discrepancies, cannot_waive)
+    FE->>Banker: Hiển thị kết quả 3 Tab + Thư Waiver tự động
+    alt Nếu không thể Waiver (cannot_waive = True)
+        FE->>Banker: Khóa nút "Gửi Waiver Letter", chỉ cho phép "Từ chối thanh toán"
+    else Nếu có thể Waiver
+        Banker->>FE: Bấm "Gửi Waiver Letter" -> Mở trình giả lập Khách hàng quyết định
     end
-    Note over BE: Chạy so khớp nghiệp vụ (compare_lc)
-    Note over BE: Gọi sinh thư xin vướng mắc (generate_waiver_draft)
-    BE-->>FE: Trả về kết quả đối chiếu & email nháp
-    Note over FE: Hiển thị lỗi, trích dẫn gốc & điểm tin cậy AI
-    User->>FE: Chỉnh sửa tay thủ công nếu phát hiện AI sai (HITL)
-    Note over FE: Frontend tự động so khớp lại & đổi màu pastel tương ứng
-    User->>FE: Ký duyệt báo cáo (VNPT SmartCA)
-    Note over FE: Ghi nhận và gửi nhật ký Audit Trail lưu trữ SQLite lâu dài ở Backend
 ```
 
 ---
 
-## 3. Cấu trúc Schema cốt lõi (Pydantic)
-Sự chặt chẽ của dữ liệu bóc tách được quy chuẩn hóa trong file [schemas.py](file:///c:/Users/maitr/OneDrive/Máy tính/LC/backend/app/schemas.py) với các trường giá trị, trích dẫn gốc (`_quote`) và điểm tin cậy tự đánh giá (`_confidence` từ 0.0 đến 1.0):
-
-```python
-class ExtractedDocument(BaseModel):
-    invoice_number: str
-    invoice_number_quote: str
-    invoice_number_confidence: float
-    
-    total_amount: float
-    total_amount_quote: str
-    total_amount_confidence: float
-    
-    currency: str
-    currency_quote: str
-    currency_confidence: float
-    
-    shipment_date: str  # Format: YYYY-MM-DD
-    shipment_date_quote: str
-    shipment_date_confidence: float
-    
-    port_of_loading: str
-    port_of_loading_quote: str
-    port_of_loading_confidence: float
-    
-    beneficiary_name: str
-    beneficiary_name_quote: str
-    beneficiary_name_confidence: float
-```
+## 3. Các Layer Thẩm Định & Đối Chiếu Dữ Liệu
+Hệ thống LC-Vision v2.0 thực hiện rà soát nghiêm ngặt qua 3 tầng nghiệp vụ:
+1. **Layer 1 (Internal Validation):** Kiểm tra nội bộ từng chứng từ (Invoice Number/Date có trống không, đơn giá x số lượng có khớp tổng tiền không, B/L có chữ ký và ghi chú Clean on Board không, Packing List có trọng lượng và số kiện hợp lệ không).
+2. **Layer 2 (Cross-Document Consistency):** Đối chiếu chéo giữa các chứng từ (Tên Shipper B/L khớp Beneficiary Invoice, Mô tả hàng hóa khớp, Số lượng khớp, B/L On-Board Date <= Invoice Date, Số kiện và Trọng lượng B/L khớp Packing List).
+3. **Layer 3 (L/C Compliance):** So khớp chứng từ với điều khoản L/C (So khớp tên Beneficiary/Applicant, Hạn mức số tiền kèm dung sai ±10% hoặc ±5%, Loại tiền tệ, Ngày giao hàng, Cảng xếp/dỡ, Incoterms, cấm giao hàng từng phần, cấm chuyển tải, Ngày xuất trình so với Ngày hết hạn L/C).
 
 ---
 
-## 📂 Chi tiết cấu trúc thư mục dự án
+## 4. Chi tiết Cấu trúc Thư mục Dự án
 
 ```text
 LC/
 ├── backend/
 │   ├── app/
-│   │   ├── __init__.py
-│   │   ├── database.py      # Quản lý cơ sở dữ liệu SQLite lưu trữ Audit Trail [NEW]
-│   │   ├── main.py          # Route chính tiếp nhận API /api/v1/check-lc & Audit Trail
-│   │   ├── schemas.py       # Định nghĩa Pydantic Schema cho dữ liệu, lỗi & Audit Trail
-│   │   └── services.py      # Quét trang PDF tối ưu, render ảnh, luồng Agent AI
-│   ├── .dockerignore        # Bỏ qua venv và pycache khi dựng container
-│   ├── Dockerfile           # Đóng gói backend (Python 3.11-slim)
-│   └── requirements.txt     # Các dependency backend (fastapi, uvicorn, pymupdf...)
+│   │   ├── database.py      # SQLite Audit Trail Database
+│   │   ├── main.py          # REST Endpoints (/check-lc, /extract-lc-file, /parse-swift...)
+│   │   ├── schemas.py       # Định nghĩa Pydantic Models (ExtractedDocument, BLExtracted, PLExtracted...)
+│   │   ├── services.py      # Quy tắc thẩm định 3 Layer, Agent 1 & Agent 2, bóc tách Vision
+│   │   └── swift_parser.py  # Phân tích cú pháp điện thô SWIFT MT700 sang L/C terms
+│   ├── auto_test.py         # Script chạy kiểm thử tự động toàn bộ luồng
+│   └── requirements.txt     # Dependencies
 ├── frontend/
 │   ├── src/
 │   │   └── app/
-│   │       ├── globals.css  # CSS cấu hình giao diện sáng
-│   │       ├── layout.tsx
-│   │       └── page.tsx     # Giao diện chính, so khớp client-side và Audit Trail
-│   ├── .dockerignore        # Bỏ qua node_modules và .next khi dựng container
-│   ├── Dockerfile           # Đóng gói frontend (Node 20-alpine)
-│   ├── next.config.ts
-│   ├── package.json         # Danh sách thư viện và scripts chạy Webpack
-│   └── tsconfig.json
-├── .env                     # File chứa mã API Key OpenAI (Được bảo mật bởi Gitignore)
-├── .env.example             # File mẫu API Key tham chiếu
-├── .gitignore               # Loại bỏ .env và node_modules khỏi Git
-├── docker-compose.yml       # Tệp docker compose điều phối cả hệ thống
+│   │       ├── globals.css  # Styling hệ thống
+│   │       └── page.tsx     # Giao diện Next.js, HITL và Trình giả lập Khách hàng
+│   ├── Dockerfile
+│   └── package.json
+├── docker-compose.yml       # Docker Composer điều phối
 ├── Architecture.md          # Tài liệu kiến trúc này
-├── flowdemo.md              # Kịch bản chạy thử hackathon
+├── flowdemo.md              # Kịch bản chạy thử demo
 └── readme.md                # Tài liệu hướng dẫn sử dụng chính
 ```
-
----
-
-## 🚀 Hướng dẫn chạy thử dự án trên môi trường Local (Không qua Docker)
-
-### Bước 1: Khởi động Backend (Python)
-1. Truy cập thư mục backend và tạo môi trường ảo:
-   ```bash
-   cd backend
-   python -m venv venv
-   ```
-2. Kích hoạt môi trường ảo (trên Windows):
-   ```bash
-   .\venv\Scripts\activate
-   ```
-3. Cài đặt các thư viện cần thiết:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Thiết lập khóa API OpenAI (PowerShell):
-   ```bash
-   $env:OPENAI_API_KEY="sk-proj-xxxxxx..."
-   ```
-5. Chạy dịch vụ FastAPI bằng uvicorn:
-   ```bash
-   uvicorn app.main:app --reload --port 8000
-   ```
-
-### Bước 2: Khởi động Frontend (Next.js)
-1. Truy cập thư mục frontend và cài đặt dependencies:
-   ```bash
-   cd ../frontend
-   npm install
-   ```
-2. Khởi chạy dev server của Next.js (chạy qua Webpack):
-   ```bash
-   npm run dev
-   ```
-3. Truy cập địa chỉ `http://localhost:3000` trên trình duyệt để trải nghiệm phần mềm.

@@ -1,16 +1,20 @@
 import asyncio
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
 import os
 import json
 import base64
+from typing import Optional
 from datetime import datetime
 from openai import AsyncOpenAI
-from .schemas import ExtractedDocument, Discrepancy
+from .schemas import ExtractedDocument, Discrepancy, BLExtracted, PLExtracted
 
 # Initialize single shared Async OpenAI Client (reused across all agents)
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY") or "mock-key-for-local-testing")
 
-# Maximum PDF file size accepted (10 MB) — guard against memory exhaustion
+# Maximum PDF file size accepted (10 MB) - guard against memory exhaustion
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
@@ -20,6 +24,8 @@ def _render_pdf_to_base64(file_bytes: bytes) -> tuple[str, int, int]:
     and renders that page to a JPEG image encoded in base64.
     Returns a tuple of (base64_string, selected_page_idx, total_pages).
     """
+    if fitz is None:
+        raise ImportError("Thư viện PyMuPDF (fitz) không khả dụng trên hệ thống này. Vui lòng cài đặt bổ sung.")
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         total_pages = len(doc)
         if total_pages == 0:
@@ -69,10 +75,13 @@ async def analyze_document_with_ai(image_base64: str) -> ExtractedDocument:
         "Bạn là chuyên gia bóc tách dữ liệu thanh toán quốc tế kiểm tra L/C (Agent 1).\n"
         "Nhiệm vụ: Hãy phân tích hình ảnh chứng từ được cung cấp, tự nhận diện chữ (OCR) và điền vào cấu trúc JSON.\n"
         "Đối với mỗi trường dữ liệu (ví dụ: invoice_number, total_amount...), bạn phải cung cấp:\n"
-        "1. Giá trị trích xuất thực tế (total_amount phải là số thực, shipment_date định dạng YYYY-MM-DD).\n"
+        "1. Giá trị trích xuất thực tế (total_amount phải là số thực, shipment_date và invoice_date định dạng YYYY-MM-DD, quantity và unit_price là số thực).\n"
         "2. ĐOẠN TRÍCH DẪN GỐC (exact quote/snippet) chứa con số hoặc thông tin đó hiển thị trên ảnh để làm minh chứng.\n"
         "3. ĐIỂM TIN CẬY (confidence score) từ 0.0 đến 1.0. Đánh giá thấp (dưới 0.8) nếu chữ bị mờ nhòe, bị dấu đóng đè lên, "
         "hoặc thông tin mang tính chất suy đoán/không rõ ràng trên ảnh.\n"
+        "Các trường thông tin cần bóc tách bao gồm: invoice_number, total_amount, currency, shipment_date, port_of_loading, "
+        "beneficiary_name, applicant_name, port_of_discharge, goods_description, incoterms, "
+        "invoice_date, beneficiary_address, applicant_address, quantity, unit_price, signature_present ('PRESENT' hoặc 'MISSING').\n"
         "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
     )
 
@@ -110,6 +119,8 @@ async def audit_extracted_document(image_base64: str, extracted: ExtractedDocume
         "Hãy kiểm tra xem các trích dẫn (quote), giá trị và điểm tự tin (confidence) có khớp và chính xác 100% so với những gì hiển thị trên ảnh hay không.\n"
         "Nếu phát hiện Agent 1 bóc tách sai lệch hoặc đánh giá sai độ tin cậy (ví dụ như chữ rất mờ nhưng Agent 1 để điểm tin cậy 1.0), "
         "bạn hãy tiến hành đính chính dữ liệu và cập nhật lại điểm tự tin tương ứng.\n"
+        "Các trường cần đối chiếu: invoice_number, total_amount, currency, shipment_date, port_of_loading, beneficiary_name, applicant_name, port_of_discharge, goods_description, incoterms, "
+        "invoice_date, beneficiary_address, applicant_address, quantity, unit_price, signature_present.\n"
         "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc ExtractedDocument JSON."
     )
 
@@ -134,24 +145,496 @@ async def audit_extracted_document(image_base64: str, extracted: ExtractedDocume
 
     return response.choices[0].message.parsed
 
-def compare_lc(lc_terms: dict, extracted: ExtractedDocument) -> list[Discrepancy]:
+async def classify_document(image_base64: str) -> str:
     """
-    Compares the audited extracted values from the invoice against L/C terms and returns a list of discrepancies.
+    Uses GPT-4o to classify the document image into:
+    "INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", or "UNKNOWN".
+    """
+    system_prompt = (
+        "Bạn là trợ lý phân loại chứng từ thương mại quốc tế.\n"
+        "Hãy phân tích hình ảnh được cung cấp và xác định loại chứng từ này thuộc loại nào:\n"
+        "- 'INVOICE': Hóa đơn thương mại (Commercial Invoice).\n"
+        "- 'BILL_OF_LADING': Vận đơn đường biển (Bill of Lading / B/L).\n"
+        "- 'PACKING_LIST': Phiếu đóng gói hàng hóa (Packing List).\n"
+        "- 'LETTER_OF_CREDIT': Thư tín dụng (Letter of Credit / L/C / MT700).\n"
+        "- 'UNKNOWN': Tài liệu khác.\n"
+        "Chỉ trả ra đúng một trong 5 từ khóa trên ở định dạng chữ in hoa."
+    )
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Phân loại chứng từ này:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0.0
+        )
+        val = response.choices[0].message.content.strip().upper()
+        if val in ["INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT"]:
+            return val
+        return "UNKNOWN"
+    except Exception:
+        return "UNKNOWN"
+
+async def analyze_bill_of_lading_with_ai(image_base64: str) -> BLExtracted:
+    """
+    Agent 1 (Extractor) for Bill of Lading.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu vận đơn đường biển (Bill of Lading - B/L) thanh toán quốc tế (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích hình ảnh vận đơn được cung cấp, tự nhận diện chữ (OCR) và điền vào cấu trúc JSON BLExtracted.\n"
+        "Đối với mỗi trường dữ liệu (ví dụ: shipper_name, port_of_loading, on_board_date...), bạn phải cung cấp:\n"
+        "1. Giá trị trích xuất thực tế (on_board_date và bl_date phải định dạng YYYY-MM-DD).\n"
+        "2. ĐOẠN TRÍCH DẪN GỐC (exact quote/snippet) chứa thông tin đó hiển thị trên ảnh.\n"
+        "3. ĐIỂM TIN CẬY (confidence score) từ 0.0 đến 1.0.\n"
+        "Các trường cần bóc tách:\n"
+        "- shipper_name: Tên Shipper\n"
+        "- consignee_name: Tên Consignee\n"
+        "- notify_party: Tên Notify Party\n"
+        "- port_of_loading: Cảng bốc hàng\n"
+        "- port_of_discharge: Cảng dỡ hàng\n"
+        "- on_board_date: Ngày xếp hàng lên tàu (thường ghi 'Clean on board', 'Shipped on board' kèm ngày)\n"
+        "- goods_description: Mô tả hàng hóa\n"
+        "- quantity: Số lượng / Trọng lượng hàng hóa\n"
+        "- clean_on_board_clause: Ghi chú thể hiện vận đơn sạch ('CLEAN ON BOARD' hoặc các câu tương đương)\n"
+        "- original_copies_count: Số bộ vận đơn gốc phát hành (VD: '3/3 originals', 'Three (3)')\n"
+        "- bl_date: Ngày ký phát hành B/L (Format YYYY-MM-DD)\n"
+        "- vessel_name_voyage: Tên tàu và số chuyến (vessel name & voyage no)\n"
+        "- signature_present: Chữ ký của Carrier / Agent ('PRESENT' hoặc 'MISSING')\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ Bill of Lading này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        response_format=BLExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def audit_bill_of_lading(image_base64: str, extracted: BLExtracted) -> BLExtracted:
+    """
+    Agent 2 (Auditor) for Bill of Lading.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra vận đơn đường biển (Agent 2).\n"
+        "Nhiệm vụ: Nhận dữ liệu bóc tách đề xuất từ Agent 1 và đối chiếu lại với hình ảnh B/L gốc.\n"
+        "Đính chính bất kỳ lỗi nào hiển thị trên ảnh và cập nhật lại điểm tự tin tương ứng.\n"
+        "Các trường đối chiếu: shipper_name, consignee_name, notify_party, port_of_loading, port_of_discharge, on_board_date, goods_description, quantity, clean_on_board_clause, original_copies_count, bl_date, vessel_name_voyage, signature_present.\n"
+        "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc BLExtracted JSON."
+    )
+    user_content = [
+        {"type": "text", "text": f"Dữ liệu đề xuất từ Agent 1:\n{extracted.model_dump_json(indent=2)}\n\nHãy đối chiếu kỹ với hình ảnh gốc để kiểm toán:"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        }
+    ]
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        response_format=BLExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def analyze_packing_list_with_ai(image_base64: str) -> PLExtracted:
+    """
+    Agent 1 (Extractor) for Packing List.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Phiếu đóng gói hàng hóa (Packing List) thanh toán quốc tế (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích hình ảnh được cung cấp và điền vào cấu trúc JSON PLExtracted.\n"
+        "Các trường cần bóc tách:\n"
+        "- goods_name: Tên hàng hóa\n"
+        "- quantity: Số lượng từng loại\n"
+        "- net_weight: Trọng lượng tịnh (Net Weight)\n"
+        "- gross_weight: Trọng lượng cả bao bì (Gross Weight)\n"
+        "- packages_count: Số kiện/thùng (Number of Packages)\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ Packing List này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        response_format=PLExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def audit_packing_list(image_base64: str, extracted: PLExtracted) -> PLExtracted:
+    """
+    Agent 2 (Auditor) for Packing List.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra Phiếu đóng gói (Agent 2).\n"
+        "Nhiệm vụ: Nhận dữ liệu bóc tách đề xuất từ Agent 1 và đối chiếu lại với hình ảnh Packing List gốc.\n"
+        "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc PLExtracted JSON."
+    )
+    user_content = [
+        {"type": "text", "text": f"Dữ liệu đề xuất từ Agent 1:\n{extracted.model_dump_json(indent=2)}\n\nHãy đối chiếu kỹ với hình ảnh gốc để kiểm toán:"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        }
+    ]
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        response_format=PLExtracted
+    )
+    return response.choices[0].message.parsed
+
+def validate_layer1(
+    invoice: ExtractedDocument,
+    bl: Optional[BLExtracted],
+    pl: Optional[PLExtracted]
+) -> list[Discrepancy]:
+    """
+    Layer 1: Document-level Validation (Kiểm tra nội bộ từng chứng từ)
     """
     discrepancies = []
 
-    # 1. Total Amount Comparison
+    # --- 1A. Commercial Invoice ---
+    if invoice and invoice.invoice_number != "":  # Avoid running on dummy fallback invoices
+        if not invoice.invoice_number.strip():
+            discrepancies.append(Discrepancy(field="invoice_number", actual_value="Trống", expected_value="Phải có", reason="Invoice Number không được để trống", severity="Error"))
+        
+        if not invoice.invoice_date.strip():
+            discrepancies.append(Discrepancy(field="invoice_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="Invoice Date không được để trống", severity="Error"))
+        else:
+            try:
+                datetime.strptime(invoice.invoice_date.strip(), "%Y-%m-%d")
+            except ValueError:
+                discrepancies.append(Discrepancy(field="invoice_date", actual_value=invoice.invoice_date, expected_value="Định dạng YYYY-MM-DD", reason="Invoice Date định dạng ngày không hợp lệ", severity="Error"))
+
+        if not invoice.beneficiary_name.strip():
+            discrepancies.append(Discrepancy(field="invoice_beneficiary", actual_value="Trống", expected_value="Phải có", reason="Tên & địa chỉ Beneficiary không được để trống", severity="Error"))
+
+        if not invoice.applicant_name.strip():
+            discrepancies.append(Discrepancy(field="invoice_applicant", actual_value="Trống", expected_value="Phải có", reason="Tên & địa chỉ Applicant không được để trống", severity="Error"))
+
+        if not invoice.goods_description.strip():
+            discrepancies.append(Discrepancy(field="invoice_goods", actual_value="Trống", expected_value="Phải có", reason="Mô tả hàng hóa không được để trống", severity="Error"))
+
+        if invoice.quantity <= 0:
+            discrepancies.append(Discrepancy(field="invoice_quantity", actual_value=str(invoice.quantity), expected_value="> 0", reason="Số lượng hàng hóa phải là số dương", severity="Error"))
+
+        if invoice.unit_price <= 0:
+            discrepancies.append(Discrepancy(field="invoice_unit_price", actual_value=str(invoice.unit_price), expected_value="> 0", reason="Đơn giá hàng hóa phải là số dương", severity="Error"))
+
+        if invoice.quantity > 0 and invoice.unit_price > 0 and invoice.total_amount > 0:
+            expected_total = invoice.quantity * invoice.unit_price
+            if abs(invoice.total_amount - expected_total) > 0.5:  # allow tiny tolerance for rounding
+                discrepancies.append(Discrepancy(field="invoice_total_amount", actual_value=f"{invoice.total_amount:,.2f}", expected_value=f"{expected_total:,.2f}", reason="Tổng giá trị không bằng Số lượng × Đơn giá", severity="Error"))
+
+        if not invoice.currency.strip():
+            discrepancies.append(Discrepancy(field="invoice_currency", actual_value="Trống", expected_value="Phải có", reason="Loại tiền tệ không được để trống", severity="Error"))
+
+        if not invoice.incoterms.strip():
+            discrepancies.append(Discrepancy(field="invoice_incoterms", actual_value="Trống", expected_value="Phải có Incoterms", reason="Thiếu điều kiện Incoterms", severity="Warning"))
+
+        if invoice.signature_present != "PRESENT":
+            discrepancies.append(Discrepancy(field="invoice_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký / con dấu của Beneficiary", severity="Warning"))
+
+    # --- 1B. Bill of Lading (B/L) ---
+    if bl:
+        if not bl.shipper_name.strip():
+            discrepancies.append(Discrepancy(field="bl_shipper", actual_value="Trống", expected_value="Phải có", reason="Tên Shipper không được để trống", severity="Error"))
+
+        if not bl.consignee_name.strip():
+            discrepancies.append(Discrepancy(field="bl_consignee", actual_value="Trống", expected_value="Phải có", reason="Tên Consignee không được để trống", severity="Error"))
+
+        if not bl.notify_party.strip():
+            discrepancies.append(Discrepancy(field="bl_notify_party", actual_value="Trống", expected_value="Phải có", reason="Thiếu thông tin Notify Party trên B/L", severity="Warning"))
+
+        if not bl.port_of_loading.strip():
+            discrepancies.append(Discrepancy(field="bl_port_of_loading", actual_value="Trống", expected_value="Phải có", reason="Cảng bốc hàng không được để trống", severity="Error"))
+
+        if not bl.port_of_discharge.strip():
+            discrepancies.append(Discrepancy(field="bl_port_of_discharge", actual_value="Trống", expected_value="Phải có", reason="Cảng dỡ hàng không được để trống", severity="Error"))
+
+        if not bl.on_board_date.strip():
+            discrepancies.append(Discrepancy(field="bl_on_board_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="Ngày xếp hàng lên tàu (On Board Date) không được để trống", severity="Error"))
+
+        if not bl.bl_date.strip():
+            discrepancies.append(Discrepancy(field="bl_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="Ngày phát hành B/L không được để trống", severity="Error"))
+
+        if not bl.vessel_name_voyage.strip():
+            discrepancies.append(Discrepancy(field="bl_vessel", actual_value="Trống", expected_value="Phải có", reason="Thiếu thông tin Vessel Name & Voyage No.", severity="Warning"))
+
+        if not bl.goods_description.strip():
+            discrepancies.append(Discrepancy(field="bl_goods", actual_value="Trống", expected_value="Phải có", reason="Mô tả hàng hóa trên B/L không được để trống", severity="Error"))
+
+        if not bl.quantity.strip():
+            discrepancies.append(Discrepancy(field="bl_quantity", actual_value="Trống", expected_value="Phải có", reason="Số lượng/Trọng lượng hàng không được để trống", severity="Error"))
+
+        clean_lower = bl.clean_on_board_clause.strip().lower()
+        if not clean_lower or ("clean" not in clean_lower and "on board" not in clean_lower):
+            discrepancies.append(Discrepancy(field="bl_clean_clause", actual_value=bl.clean_on_board_clause or "Không có", expected_value="Clean on Board", reason="Vận đơn phải là loại sạch (Clean on Board) — không được có ghi chú bảo lưu xấu", severity="Error"))
+
+        if bl.signature_present != "PRESENT":
+            discrepancies.append(Discrepancy(field="bl_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký của Carrier hoặc Agent (UCP 600 Art.20)", severity="Error"))
+
+        if not bl.original_copies_count.strip():
+            discrepancies.append(Discrepancy(field="bl_copies", actual_value="Trống", expected_value="Phải ghi rõ số bản gốc", reason="Thiếu thông tin số bộ B/L gốc phát hành", severity="Warning"))
+
+    # --- 1C. Packing List (P/L) ---
+    if pl:
+        if not pl.goods_name.strip():
+            discrepancies.append(Discrepancy(field="pl_goods", actual_value="Trống", expected_value="Phải có", reason="Tên hàng hóa trên Packing List không được để trống", severity="Error"))
+
+        if pl.quantity <= 0:
+            discrepancies.append(Discrepancy(field="pl_quantity", actual_value=str(pl.quantity), expected_value="> 0", reason="Số lượng hàng trên Packing List phải là số dương", severity="Error"))
+
+        if not pl.net_weight.strip():
+            discrepancies.append(Discrepancy(field="pl_net_weight", actual_value="Trống", expected_value="Phải có", reason="Trọng lượng tịnh (Net Weight) không được để trống", severity="Error"))
+
+        if not pl.gross_weight.strip():
+            discrepancies.append(Discrepancy(field="pl_gross_weight", actual_value="Trống", expected_value="Phải có", reason="Trọng lượng cả bao bì (Gross Weight) không được để trống", severity="Error"))
+
+        if pl.packages_count <= 0:
+            discrepancies.append(Discrepancy(field="pl_packages_count", actual_value=str(pl.packages_count), expected_value="> 0", reason="Số kiện/thùng (Number of Packages) phải là số dương", severity="Error"))
+
+    return discrepancies
+
+def cross_check_documents(
+    invoice: ExtractedDocument,
+    bl: Optional[BLExtracted],
+    pl: Optional[PLExtracted]
+) -> list[Discrepancy]:
+    """
+    Layer 2: Cross-check documents consistency (Invoice vs B/L vs Packing List)
+    """
+    discrepancies = []
+    
+    if bl:
+        # 1. Beneficiary (Invoice) vs Shipper (B/L)
+        if invoice.beneficiary_name and bl.shipper_name:
+            inv_ben = invoice.beneficiary_name.strip().lower()
+            bl_ship = bl.shipper_name.strip().lower()
+            if inv_ben != bl_ship:
+                if inv_ben not in bl_ship and bl_ship not in inv_ben:
+                    discrepancies.append(Discrepancy(
+                        field="cross_beneficiary_shipper",
+                        actual_value=bl.shipper_name,
+                        expected_value=invoice.beneficiary_name,
+                        reason="Tên Shipper trên B/L không khớp với bên thụ hưởng (Beneficiary) trên Hóa đơn",
+                        severity="Error"
+                    ))
+                    
+        # 2. Goods Description (Invoice) vs B/L
+        if invoice.goods_description and bl.goods_description:
+            inv_goods = invoice.goods_description.strip().lower()
+            bl_goods = bl.goods_description.strip().lower()
+            inv_words = set(w for w in inv_goods.split() if len(w) > 3)
+            bl_words = set(w for w in bl_goods.split() if len(w) > 3)
+            if not inv_words.intersection(bl_words) and inv_goods not in bl_goods and bl_goods not in inv_goods:
+                discrepancies.append(Discrepancy(
+                    field="cross_goods_invoice_bl",
+                    actual_value=bl.goods_description,
+                    expected_value=invoice.goods_description,
+                    reason="Mô tả hàng hóa trên B/L không tương đồng với trên Hóa đơn thương mại",
+                    severity="Error"
+                ))
+                
+        # 3. Port of Loading (Invoice) vs B/L
+        if invoice.port_of_loading and bl.port_of_loading:
+            if invoice.port_of_loading.strip().lower() != bl.port_of_loading.strip().lower():
+                discrepancies.append(Discrepancy(
+                    field="cross_loading_port",
+                    actual_value=bl.port_of_loading,
+                    expected_value=invoice.port_of_loading,
+                    reason="Cảng bốc hàng trên B/L không khớp với Hóa đơn",
+                    severity="Error"
+                ))
+
+        # 4. Port of Discharge (Invoice) vs B/L
+        if invoice.port_of_discharge and bl.port_of_discharge:
+            if invoice.port_of_discharge.strip().lower() != bl.port_of_discharge.strip().lower():
+                discrepancies.append(Discrepancy(
+                    field="cross_discharge_port",
+                    actual_value=bl.port_of_discharge,
+                    expected_value=invoice.port_of_discharge,
+                    reason="Cảng dỡ hàng trên B/L không khớp với Hóa đơn",
+                    severity="Error"
+                ))
+
+        # 5. Chronological Order: On Board Date (B/L) <= Invoice Date (Soft)
+        if invoice.invoice_date and bl.on_board_date:
+            try:
+                inv_dt = datetime.strptime(invoice.invoice_date.strip(), "%Y-%m-%d")
+                bl_dt = datetime.strptime(bl.on_board_date.strip(), "%Y-%m-%d")
+                if bl_dt > inv_dt:
+                    discrepancies.append(Discrepancy(
+                        field="cross_date_chronology",
+                        actual_value=f"Ngày xếp hàng B/L ({bl.on_board_date}) muộn hơn Ngày Hóa đơn ({invoice.invoice_date})",
+                        expected_value="Ngày xếp hàng phải trước hoặc bằng Ngày Hóa đơn",
+                        reason="Ngày xếp hàng lên tàu (B/L) muộn hơn ngày phát hành Hóa đơn",
+                        severity="Warning"
+                    ))
+            except ValueError:
+                pass
+        
+    if pl:
+        # 1. Invoice vs Packing List Goods Description
+        if invoice.goods_description and pl.goods_name:
+            inv_goods = invoice.goods_description.strip().lower()
+            pl_goods = pl.goods_name.strip().lower()
+            inv_words = set(w for w in inv_goods.split() if len(w) > 3)
+            pl_words = set(w for w in pl_goods.split() if len(w) > 3)
+            if not inv_words.intersection(pl_words) and inv_goods not in pl_goods and pl_goods not in inv_goods:
+                discrepancies.append(Discrepancy(
+                    field="cross_goods_invoice_pl",
+                    actual_value=pl.goods_name,
+                    expected_value=invoice.goods_description,
+                    reason="Mô tả hàng hóa trên Packing List không tương đồng với trên Hóa đơn",
+                    severity="Error"
+                ))
+                
+        # 2. Invoice vs Packing List Quantity
+        if invoice.quantity > 0 and pl.quantity > 0:
+            if abs(invoice.quantity - pl.quantity) > 0.01:
+                discrepancies.append(Discrepancy(
+                    field="cross_quantity_invoice_pl",
+                    actual_value=str(pl.quantity),
+                    expected_value=str(invoice.quantity),
+                    reason="Số lượng hàng hóa trên Packing List không khớp với trên Hóa đơn thương mại",
+                    severity="Error"
+                ))
+
+    # 3. B/L vs Packing List checks
+    if bl and pl:
+        # 3A. Gross Weight (B/L vs PL)
+        if bl.quantity and pl.gross_weight:
+            import re
+            bl_nums = re.findall(r"[-+]?\d*\.\d+|\d+", bl.quantity.replace(",", ""))
+            pl_nums = re.findall(r"[-+]?\d*\.\d+|\d+", pl.gross_weight.replace(",", ""))
+            if bl_nums and pl_nums:
+                try:
+                    bl_weight = float(bl_nums[0])
+                    pl_weight = float(pl_nums[0])
+                    if abs(bl_weight - pl_weight) / max(1.0, pl_weight) > 0.02:
+                        discrepancies.append(Discrepancy(
+                            field="cross_gross_weight_bl_pl",
+                            actual_value=bl.quantity,
+                            expected_value=pl.gross_weight,
+                            reason="Tổng trọng lượng hàng hóa trên B/L không khớp với trên Packing List",
+                            severity="Error"
+                        ))
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        # 3B. Packages Count (B/L vs PL)
+        if bl.quantity and pl.packages_count > 0:
+            import re
+            pkg_str = str(int(pl.packages_count))
+            if pkg_str not in bl.quantity:
+                bl_nums = re.findall(r"\d+", bl.quantity.replace(",", ""))
+                if bl_nums:
+                    try:
+                        bl_pkg = int(bl_nums[0])
+                        if bl_pkg != int(pl.packages_count):
+                            discrepancies.append(Discrepancy(
+                                field="cross_packages_count_bl_pl",
+                                actual_value=bl.quantity,
+                                expected_value=f"{pl.packages_count} kiện",
+                                reason="Số kiện/thùng trên B/L không khớp với Packing List",
+                                severity="Error"
+                            ))
+                    except ValueError:
+                        pass
+
+    return discrepancies
+
+def compare_lc(lc_terms: dict, extracted: ExtractedDocument, bl: Optional[BLExtracted] = None) -> list[Discrepancy]:
+    """
+    Compares the audited extracted values from the invoice (and B/L) against L/C terms and returns a list of discrepancies.
+    """
+    discrepancies = []
+
+    # 1. Total Amount Comparison with Tolerance
     lc_max_amount = lc_terms.get("max_amount")
     if lc_max_amount is not None:
         try:
             lc_max_amount = float(lc_max_amount)
-            if extracted.total_amount > lc_max_amount:
+            
+            # Parse tolerance percentage (default: ±5% if not specified, 0% if 'exactly' or '0', else parse value)
+            amount_tol_str = str(lc_terms.get("amount_tolerance", "")).strip().lower()
+            positive_tol = 5.0
+            negative_tol = 5.0
+            
+            if "exactly" in amount_tol_str or amount_tol_str == "0":
+                positive_tol = 0.0
+                negative_tol = 0.0
+            elif "/" in amount_tol_str:
+                parts = amount_tol_str.split("/")
+                try:
+                    positive_tol = float(parts[0].replace("%", "").strip())
+                    negative_tol = float(parts[1].replace("%", "").strip())
+                except:
+                    pass
+            elif amount_tol_str:
+                try:
+                    val = float(amount_tol_str.replace("%", "").strip())
+                    positive_tol = val
+                    negative_tol = val
+                except:
+                    pass
+            
+            max_allowed = lc_max_amount * (1 + positive_tol / 100.0)
+            
+            if extracted.total_amount > max_allowed:
                 discrepancies.append(
                     Discrepancy(
                         field="total_amount",
                         actual_value=f"{extracted.total_amount:,.2f}",
-                        expected_value=f"<= {lc_max_amount:,.2f}",
-                        reason=f"Tổng số tiền vượt hạn mức L/C cho phép (Lệch {extracted.total_amount - lc_max_amount:,.2f})",
+                        expected_value=f"<= {max_allowed:,.2f} (Hạn mức {lc_max_amount:,.2f} + {positive_tol}% dung sai)",
+                        reason=f"Tổng số tiền vượt hạn mức L/C cho phép sau khi tính dung sai (Lệch {extracted.total_amount - max_allowed:,.2f})",
                         severity="Error"
                     )
                 )
@@ -191,7 +674,34 @@ def compare_lc(lc_terms: dict, extracted: ExtractedDocument) -> list[Discrepancy
         except ValueError:
             pass
 
-    # 4. Beneficiary Name Comparison
+    # 4. Expiry Date / Presentation Date Comparison (Absolute Refusal)
+    lc_expiry = lc_terms.get("expiry_date")
+    presentation_date_str = ""
+    if bl and bl.bl_date:
+        presentation_date_str = bl.bl_date.strip()
+    elif extracted.invoice_date:
+        presentation_date_str = extracted.invoice_date.strip()
+    else:
+        presentation_date_str = datetime.today().strftime("%Y-%m-%d")
+
+    if lc_expiry and presentation_date_str:
+        try:
+            pres_dt = datetime.strptime(presentation_date_str, "%Y-%m-%d")
+            exp_dt = datetime.strptime(lc_expiry.strip(), "%Y-%m-%d")
+            if pres_dt > exp_dt:
+                discrepancies.append(
+                    Discrepancy(
+                        field="expiry_date",
+                        actual_value=presentation_date_str,
+                        expected_value=f"Trước hoặc bằng Ngày hết hạn {lc_expiry}",
+                        reason=f"Ngày xuất trình chứng từ ({presentation_date_str}) muộn hơn Ngày hết hạn của L/C ({lc_expiry}) — Từ chối tuyệt đối, không thể xin Waiver",
+                        severity="Absolute"
+                    )
+                )
+        except ValueError:
+            pass
+
+    # 5. Beneficiary Name Comparison
     lc_beneficiary = lc_terms.get("beneficiary_name")
     if lc_beneficiary and extracted.beneficiary_name:
         if lc_beneficiary.strip().lower() != extracted.beneficiary_name.strip().lower():
@@ -205,7 +715,21 @@ def compare_lc(lc_terms: dict, extracted: ExtractedDocument) -> list[Discrepancy
                 )
             )
 
-    # 5. Port of Loading Comparison
+    # 6. Applicant Name Comparison
+    lc_applicant = lc_terms.get("applicant_name")
+    if lc_applicant and extracted.applicant_name:
+        if lc_applicant.strip().lower() != extracted.applicant_name.strip().lower():
+            discrepancies.append(
+                Discrepancy(
+                    field="applicant_name",
+                    actual_value=extracted.applicant_name,
+                    expected_value=lc_applicant,
+                    reason="Tên người mua (Applicant) không khớp chuẩn với L/C (UCP 600 Art.18)",
+                    severity="Error"
+                )
+            )
+
+    # 7. Port of Loading Comparison
     lc_port = lc_terms.get("port_of_loading")
     if lc_port and extracted.port_of_loading:
         if lc_port.strip().lower() != extracted.port_of_loading.strip().lower():
@@ -216,6 +740,84 @@ def compare_lc(lc_terms: dict, extracted: ExtractedDocument) -> list[Discrepancy
                     expected_value=lc_port,
                     reason="Cảng bốc hàng không trùng khớp với điều khoản L/C",
                     severity="Warning"
+                )
+            )
+
+    # 8. Port of Discharge Comparison
+    lc_discharge = lc_terms.get("port_of_discharge")
+    if lc_discharge and extracted.port_of_discharge:
+        if lc_discharge.strip().lower() != extracted.port_of_discharge.strip().lower():
+            discrepancies.append(
+                Discrepancy(
+                    field="port_of_discharge",
+                    actual_value=extracted.port_of_discharge,
+                    expected_value=lc_discharge,
+                    reason="Cảng dỡ hàng không trùng khớp với điều khoản L/C",
+                    severity="Error"
+                )
+            )
+
+    # 9. Incoterms Comparison
+    lc_incoterms = lc_terms.get("incoterms")
+    if lc_incoterms and extracted.incoterms:
+        if lc_incoterms.strip().lower() not in extracted.incoterms.strip().lower():
+            discrepancies.append(
+                Discrepancy(
+                    field="incoterms",
+                    actual_value=extracted.incoterms,
+                    expected_value=lc_incoterms,
+                    reason="Điều kiện giao hàng (Incoterms) không trùng khớp với L/C",
+                    severity="Error"
+                )
+            )
+
+    # 10. Goods Description Comparison
+    lc_goods = lc_terms.get("goods_description")
+    if lc_goods and extracted.goods_description:
+        lc_lower = lc_goods.strip().lower()
+        ext_lower = extracted.goods_description.strip().lower()
+        if lc_lower not in ext_lower:
+            # Check for keyword overlap
+            lc_words = set(w for w in lc_lower.split() if len(w) > 3)
+            ext_words = set(w for w in ext_lower.split() if len(w) > 3)
+            if not lc_words.intersection(ext_words):
+                discrepancies.append(
+                    Discrepancy(
+                        field="goods_description",
+                        actual_value=extracted.goods_description,
+                        expected_value=lc_goods,
+                        reason="Mô tả hàng hóa không trùng khớp hoặc không tương đương với L/C",
+                        severity="Error"
+                    )
+                )
+
+    # 11. Partial Shipment Comparison
+    lc_partial = str(lc_terms.get("partial_shipment", "")).strip().upper()
+    if lc_partial == "PROHIBITED" and bl:
+        bl_text = f"{bl.goods_description} {bl.quantity} {bl.clean_on_board_clause}".lower()
+        if "partial" in bl_text or "part shipment" in bl_text:
+            discrepancies.append(
+                Discrepancy(
+                    field="partial_shipment",
+                    actual_value="Có dấu hiệu giao hàng từng phần trên B/L",
+                    expected_value="PROHIBITED (Không cho phép)",
+                    reason="L/C cấm giao hàng từng phần nhưng chứng từ có dấu hiệu vi phạm",
+                    severity="Error"
+                )
+            )
+
+    # 12. Transhipment Comparison
+    lc_tranship = str(lc_terms.get("transhipment", "")).strip().upper()
+    if lc_tranship == "PROHIBITED" and bl:
+        bl_text = f"{bl.goods_description} {bl.quantity} {bl.clean_on_board_clause}".lower()
+        if "tranship" in bl_text or "transship" in bl_text:
+            discrepancies.append(
+                Discrepancy(
+                    field="transhipment",
+                    actual_value="Có dấu hiệu chuyển tải trên B/L",
+                    expected_value="PROHIBITED (Không cho phép)",
+                    reason="L/C cấm chuyển tải nhưng vận đơn thể hiện có chuyển tải",
+                    severity="Error"
                 )
             )
 
@@ -268,3 +870,39 @@ async def generate_waiver_draft(discrepancies: list[Discrepancy], lc_terms: dict
         return response.choices[0].message.content
     except Exception as e:
         return f"Lỗi khi tự động soạn thảo thư từ AI: {str(e)}"
+
+async def analyze_lc_with_ai(image_base64: str) -> "LCTermsSchema":
+    """
+    Agent 1 (Extractor) for Letter of Credit.
+    Extracts L/C terms from the L/C PDF image using LCTermsSchema.
+    """
+    from .swift_parser import LCTermsSchema
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách thư tín dụng (Letter of Credit / L/C / MT700) (Agent 1).\n"
+        "Nhiệm vụ: Phân tích hình ảnh tài liệu L/C, tự nhận diện chữ (OCR) và điền vào cấu trúc JSON LCTermsSchema.\n"
+        "Bóc tách các trường và đánh giá độ tin cậy tương ứng:\n"
+        "max_amount, currency, latest_shipment, beneficiary_name, port_of_loading, applicant_name, expiry_date, "
+        "port_of_discharge, goods_description, incoterms, partial_shipment, transhipment, amount_tolerance.\n"
+        "Hãy điền chính xác, các trường số tiền phải là float, nếu không tìm thấy hãy để mặc định."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ Thư tín dụng L/C này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        response_format=LCTermsSchema
+    )
+    return response.choices[0].message.parsed

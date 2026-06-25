@@ -1,90 +1,51 @@
-# 🎬 KỊCH BẢN CHẠY THỬ VÀ DEMO SẢN PHẨM (LC-VISION FLOW DEMO)
+# 🎬 KỊCH BẢN CHẠY THỬ VÀ DEMO SẢN PHẨM (LC-VISION v2.0 FLOW DEMO)
 
-Tài liệu này hướng dẫn chi tiết kịch bản từng bước nhỏ (all-in-one) để chạy thử nghiệm và trình diễn toàn bộ tính năng của dự án LC-Vision trên giao diện Web.
+Tài liệu này hướng dẫn chi tiết kịch bản từng bước để trình diễn toàn bộ tính năng nghiệp vụ nâng cấp của dự án LC-Vision v2.0 trên giao diện Web.
 
 ---
 
 ## 🛠️ Chuẩn bị trước khi chạy Demo (Preparation)
-1. Đảm bảo toàn bộ hệ thống đang chạy ổn định bằng Docker:
+1. Đảm bảo Backend và Frontend đang chạy ổn định.
+2. Kiểm thử tự động đã chạy thành công qua lệnh:
    ```bash
-   docker compose up --build -d
+   .\.venv\Scripts\python.exe auto_test.py
    ```
-2. Xác minh hai file PDF mẫu kiểm thử đã có sẵn trên máy của bạn:
-   * **File hợp lệ (Pass Case):** [invoice_valid.pdf](file:///Users/maitranhuy/Documents/HackathonCodex/backend/test_samples/invoice_valid.pdf)
-   * **File lỗi/sai lệch (Fail Case):** [invoice_invalid.pdf](file:///Users/maitranhuy/Documents/HackathonCodex/backend/test_samples/invoice_invalid.pdf)
 
 ---
 
 ## 🚀 Kịch bản Demo từng bước (Step-by-Step Demo Flow)
 
-### Bước 1: Mở giao diện và Kiểm tra hạ tầng
-1. Mở trình duyệt Web và truy cập địa chỉ: [http://localhost:3000](http://localhost:3000).
-2. Kiểm tra xem góc trên cùng bên phải giao diện có hiển thị chấm xanh nhấp nháy: `● Doanh Nghiệp (Multi-Agent Vision)` hay chưa (báo hiệu kết nối backend sẵn sàng).
+### Bước 1: Đăng nhập & Bảng điều khiển (Dashboard)
+1. Truy cập địa chỉ [http://localhost:3000](http://localhost:3000).
+2. Đăng nhập bằng tài khoản: `admin` / mật khẩu: `admin`.
+3. Giao diện chuyển hướng về **Dashboard** hiển thị danh sách các bộ chứng từ gần đây kèm trạng thái động (`Compliant`, `Discrepant`, `Closed Rejected`...) và Audit Trail đồng bộ từ SQLite database.
+4. Nhấn nút **"+ Tạo kiểm tra mới"**.
 
-### Bước 2: Trình diễn "AI Giải mã điện SWIFT MT700"
-1. Tại ô **1. Cấu hình L/C tham chiếu** ở cột bên trái, click chuyển sang tab **Bức điện SWIFT**.
-2. Copy đoạn điện SWIFT mẫu dưới đây và dán vào ô nhập liệu:
-   ```text
-   :20: LCNUMBER778899
-   :59: BENEFICIARY
-   ASIA TEXTILE JOINT STOCK COMPANY
-   10 CO GIANG STREET, DISTRICT 1, HO CHI MINH CITY, VIETNAM
-   :32B: CURRENCY CODE, AMOUNT
-   EUR 120000,00
-   :44A: PORT OF LOADING
-   CAT LAI PORT, VIETNAM
-   :44C: LATEST DATE OF SHIPMENT
-   260815
-   ```
-3. Bấm nút **AI Tự Động Phân Tích L/C** và quan sát:
-   * Sau 1-2 giây, giao diện sẽ tự chuyển về tab **Nhập Form**.
-   * Các trường thông tin L/C đã tự động được điền chuẩn xác (Số tiền: `120,000`, Loại tiền: `EUR`, Người thụ hưởng: `ASIA TEXTILE...`, Hạn giao hàng: `2026-08-15`, Cảng bốc hàng: `CAT LAI PORT...`).
+### Bước 2: Tải lên tài liệu & AI tự động phân loại
+1. Ở cột bên trái, bạn có thể dán điện SWIFT MT700 mẫu (hoặc upload file L/C dạng PDF).
+2. Upload bộ chứng từ thương mại bằng cách kéo thả nhiều file PDF cùng lúc vào ô **Vùng kéo thả**.
+   * Hệ thống sẽ tự động sử dụng AI để đọc nội dung và phân loại xem đâu là Hóa đơn (Invoice), Vận đơn (B/L) hay Phiếu đóng gói (Packing List).
+3. Bấm nút **"Kiểm duyệt điều khoản L/C >>"** để qua bước tiếp theo.
 
-### Bước 3: Trình diễn "Upload chứng từ Hợp lệ & Tối ưu hóa Agent"
-Để tiện demo, ta cấu hình lại các thông số L/C về các thông số mặc định của bộ kiểm thử:
-* *Max Amount:* `50000` | *Currency:* `USD` | *Latest Shipment:* `2026-06-30` | *Beneficiary:* `GLOBAL TRADING CORP` | *Port:* `HAIPHONG PORT`
-1. Kéo và thả tệp [invoice_valid.pdf](file:///Users/maitranhuy/Documents/HackathonCodex/backend/test_samples/invoice_valid.pdf) vào vùng upload ở cột bên trái.
-2. Bấm nút **Chạy đối chiếu AI**.
-3. Quan sát **Trình giám sát tác nhân AI (Live Console)** ở góc trên bên phải:
-   * Tiến trình sẽ cập nhật từng bước thời gian thực.
-   * Tại bước 4, AI sẽ thông báo: `[Tối ưu hóa] Độ tự tin bóc tách của Agent 1 cao (>=85%), tự động bỏ qua Agent 2...` (Trình diễn tính năng tối ưu hóa chi phí/độ trễ).
-4. Quan sát kết quả đối chiếu:
-   * Bảng kết quả hiển thị **màu xanh lá pastel (Pass)** hoàn toàn.
-   * Bên dưới hiển thị các đoạn **Trích dẫn gốc (Quote)** tương ứng cho mỗi trường (minh chứng AI minh bạch).
-   * Không có bất kỳ dòng cảnh báo lỗi sai biệt nào.
+### Bước 3: Vượt qua chốt chặn an toàn (Safety Gate - Bước 3B)
+1. Giao diện hiển thị các điều khoản L/C mà AI đã bóc tách được (Ground Truth).
+2. Chuyên viên rà soát các trường thông tin. Các trường có độ tin cậy thấp (< 80%) sẽ có nhãn cảnh báo **"⚠️ Cần kiểm tra kỹ"** nhấp nháy.
+3. **Demo Case chặn Expiry L/C:** Nếu trường `Expiry Date` trong L/C đã qua so với thời gian hiện tại, hệ thống hiển thị cảnh báo màu đỏ chói cảnh báo L/C đã hết hạn hiệu lực và nút Xác nhận sẽ bị vô hiệu hóa (Block) hoàn toàn.
+4. Bấm nút **"Xác nhận & Bắt đầu kiểm tra chéo"** để chạy kiểm tra 3 Layer.
 
-### Bước 4: Trình diễn "Đối chiếu Sai lệch & Cảnh báo độ tin cậy AI"
-1. Tại vùng upload, bấm nút **Hủy bỏ & Chọn lại**.
-2. Kéo và thả tệp [invoice_invalid.pdf](file:///Users/maitranhuy/Documents/HackathonCodex/backend/test_samples/invoice_invalid.pdf) vào vùng upload.
-3. Bấm nút **Chạy đối chiếu AI** và theo dõi Live Console.
-4. Quan sát kết quả đối chiếu:
-   * Các ô dữ liệu vi phạm điều khoản L/C được tô đậm bằng **màu đỏ pastel (Fail)**.
-   * Hiển thị bảng chi tiết 4 lỗi bất hợp lệ (vượt hạn mức, muộn hạn giao hàng, sai tên thụ hưởng, sai cảng bốc hàng).
-   * Các ô dữ liệu bóc tách được từ hình ảnh có hiển thị điểm tin cậy (Confidence %).
+### Bước 4: AI Processing & Kết quả kiểm tra chéo 3 Tab
+1. Live Console hiển thị luồng xử lý NDJSON thời gian thực từ Backend.
+2. Màn hình kết quả hiển thị chia làm **3 Tab rõ rệt**:
+   * **Tab 1: Kiểm tra nội bộ (Layer 1)**: Hiển thị lỗi cấu trúc nội bộ của từng file (ví dụ: hóa đơn thiếu chữ ký, B/L thiếu điều khoản Clean on board, tổng tiền hóa đơn lệch so với Đơn giá x Số lượng).
+   * **Tab 2: Kiểm tra chéo (Layer 2)**: Hiển thị lỗi lệch dữ liệu giữa Invoice ↔ B/L ↔ Packing List (như lệch Ngày, lệch Trọng lượng Gross weight hoặc Số kiện).
+   * **Tab 3: Đối chiếu L/C (Layer 3)**: Hiển thị lỗi so khớp các chứng từ so với điều khoản L/C gốc.
+3. Người dùng có thể sửa đổi dữ liệu sai lệch qua nút bút chì (HITL). Hệ thống lập tức tự động tính toán so khớp lại tại Client và đưa điểm tin cậy lên 100%.
 
-### Bước 5: Trình diễn can thiệp thủ công (Human-in-the-Loop - HITL)
-1. Trên bảng kết quả đối chiếu, tìm dòng **Tổng số tiền** (đang báo lỗi đỏ do thực tế hóa đơn là `73,000` trong khi L/C yêu cầu `<= 50,000`).
-2. Rê chuột vào dòng đó và click nút **bút chì (Edit)**.
-3. Thay đổi giá trị từ `73000` thành `48000` và bấm nút **Lưu (Checkmark)**.
-4. Quan sát:
-   * Hệ thống tự động tính toán so khớp lại ngay lập tức tại Client.
-   * Dòng **Tổng số tiền** lập tức chuyển từ màu đỏ (Fail) sang **màu xanh (Pass)**.
-   * Số lỗi bất hợp lệ giảm đi và điểm tin cậy của trường này nhảy lên **100%** (do con người đã xác thực).
-
-### Bước 6: Trình diễn "Giả lập Ký số & Nhật ký vận hành dài hạn"
-1. Cuộn xuống phần soạn thảo Email vướng mắc **Auto-Waiver Letter** ở cuối trang:
-   * Quan sát thư nháp song ngữ Anh - Việt chuyên nghiệp do GPT-4o tự soạn thảo liệt kê đầy đủ các lỗi sai lệch còn lại để gửi bên mua ký nhận.
-2. Bấm nút **Approve & Sign Report**:
-   * Hộp thoại kết nối cổng chữ ký số VNPT SmartCA hiện lên, chạy giả lập truyền dữ liệu băm và ký duyệt trong 2.5 giây.
-   * Hệ thống hiển thị ký duyệt thành công kèm mã **TxHash** độc bản.
-3. Cuộn xuống phần **Nhật ký vận hành (Audit Trail)**:
-   * Quan sát dòng thời gian ghi nhận đầy đủ lịch sử hoạt động từ khi tải file, AI bóc tách, người dùng sửa tay (HITL), cho đến khi hoàn thành ký duyệt SmartCA.
-
-### Bước 7: Xác minh "Tính lâu dài của Audit Trail" (SQLite Persistence)
-1. Bấm nút **F5 (Reload/Tải lại trang)** trình duyệt.
-2. Cuộn xuống chân trang kiểm tra phần **Nhật ký vận hành (Audit Trail)**:
-   * Quan sát: Toàn bộ dòng lịch sử hoạt động cũ **không bị mất** mà được tự động tải trực tiếp từ cơ sở dữ liệu SQLite ở Backend lên hiển thị.
-
-### Bước 8: Dọn dẹp phiên làm việc
-1. Cuộn lên vùng upload, bấm nút **Hủy bỏ & Chọn lại**:
-   * Hệ thống sẽ dọn dẹp giao diện sạch sẽ và đồng thời gửi lệnh xóa toàn bộ nhật ký trên SQLite database để sẵn sàng cho lượt chạy demo tiếp theo.
+### Bước 5: Chấp nhận / Từ chối Waiver (Waiver Decision Simulator)
+* **Kịch bản L/C quá hạn xuất trình (Expiry Date exceeded)**:
+  1. Nếu ngày B/L Date / ngày trình chứng từ muộn hơn Expiry Date, hệ thống hiển thị thông báo: `"🔴 L/C QUÁ HẠN XUẤT TRÌNH - TỪ CHỐI THANH TOÁN TUYỆT ĐỐI"`.
+  2. Nút **"Gửi đề xuất Waiver" bị ẩn/khóa**. Banker chỉ có thể chọn **"Từ chối thanh toán"** và nhập lý do.
+* **Kịch bản Lỗi mềm (Soft Discrepancies)**:
+  1. Nếu các lỗi phát hiện đều có thể bảo lưu, Banker bấm **"Gửi Đề Xuất Waiver"**.
+  2. AI tự động soạn thảo Waiver Request Letter song ngữ Anh-Việt.
+  3. Sử dụng trình **Mô phỏng Khách hàng (Applicant)** ở góc bên phải để bấm **"Chấp nhận Waiver"** (trạng thái chuyển sang `Compliant with Waiver`) hoặc **"Từ chối Waiver"** (trạng thái chuyển sang `Closed Rejected`).

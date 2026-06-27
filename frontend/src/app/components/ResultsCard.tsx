@@ -9,21 +9,22 @@ interface ResultsCardProps {
   extractedPl: any;
   extractedCo: any;
   extractedCq: any;
+  extractedInsurance: any;
   resultStep: "ocr_check" | "compliance_check";
   setResultStep: (step: "ocr_check" | "compliance_check") => void;
-  activeOcrTab: "invoice" | "bl" | "pl" | "co" | "cq";
-  setActiveOcrTab: (tab: "invoice" | "bl" | "pl" | "co" | "cq") => void;
+  activeOcrTab: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance";
+  setActiveOcrTab: (tab: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance") => void;
   activeTab: "internal" | "cross" | "lc";
   setActiveTab: (tab: "internal" | "cross" | "lc") => void;
   discrepancyList: Discrepancy[];
   layer1Discrepancies: Discrepancy[];
   crossDiscrepancies: Discrepancy[];
   cannotWaive: boolean;
-  editingDoc: "invoice" | "bl" | "pl" | "co" | "cq" | null;
+  editingDoc: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance" | null;
   editingField: string | null;
   editValue: string;
   setEditValue: (val: string) => void;
-  startEditingField: (doc: "invoice" | "bl" | "pl" | "co" | "cq", field: string) => void;
+  startEditingField: (doc: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance", field: string) => void;
   saveEditingField: () => void;
   handleRerunValidation: () => Promise<void>;
   isRerunningValidation: boolean;
@@ -42,6 +43,7 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
   extractedPl,
   extractedCo,
   extractedCq,
+  extractedInsurance,
   resultStep,
   activeOcrTab,
   setActiveOcrTab,
@@ -67,13 +69,14 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
   setResult
 }) => {
 
-  const renderOcrRow = (docType: "invoice" | "bl" | "pl" | "co" | "cq", label: string, fieldKey: string, type: string, options?: string[]) => {
+  const renderOcrRow = (docType: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance", label: string, fieldKey: string, type: string, options?: string[]) => {
     let docData: any = null;
     if (docType === "invoice") docData = extractedDoc;
     else if (docType === "bl") docData = extractedBl;
     else if (docType === "pl") docData = extractedPl;
     else if (docType === "co") docData = extractedCo;
     else if (docType === "cq") docData = extractedCq;
+    else if (docType === "insurance") docData = extractedInsurance;
 
     if (!docData) return null;
 
@@ -222,6 +225,16 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
                 Chứng nhận chất lượng (C/Q)
               </button>
             )}
+            {extractedInsurance && (
+              <button
+                onClick={() => setActiveOcrTab("insurance")}
+                className={`pb-3 text-xs font-bold transition-all px-4 relative shrink-0 ${
+                  activeOcrTab === "insurance" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                Chứng thư bảo hiểm
+              </button>
+            )}
           </div>
 
           <div className="mb-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-start gap-2.5">
@@ -301,6 +314,16 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
                   { label: "Cam kết chất lượng (Quality statement)", key: "quality_statement", type: "text" },
                   { label: "Chữ ký & Đóng dấu kiểm định", key: "signature_present", type: "select", options: ["PRESENT", "MISSING"] }
                 ].map(f => renderOcrRow("cq", f.label, f.key, f.type, f.options))}
+
+                {activeOcrTab === "insurance" && [
+                  { label: "Số chứng thư bảo hiểm (Policy/Cert No.)", key: "insurance_number", type: "text" },
+                  { label: "Ngày phát hành bảo hiểm", key: "insurance_date", type: "text" },
+                  { label: "Số tiền bảo hiểm (Insured Amount)", key: "insured_amount", type: "text" },
+                  { label: "Đơn vị tiền tệ (Currency)", key: "currency", type: "text" },
+                  { label: "Bên được bảo hiểm (Insured Name)", key: "insured_name", type: "text" },
+                  { label: "Số hóa đơn tham chiếu", key: "invoice_number", type: "text" },
+                  { label: "Chữ ký nhà bảo hiểm/đại lý", key: "signature_present", type: "select", options: ["PRESENT", "MISSING"] }
+                ].map(f => renderOcrRow("insurance", f.label, f.key, f.type, f.options))}
               </tbody>
             </table>
           </div>

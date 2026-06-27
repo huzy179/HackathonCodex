@@ -298,6 +298,50 @@ class CQExtracted(BaseModel):
         return _clamp_confidence(v)
 
 
+class InsuranceExtracted(BaseModel):
+    insurance_number: str = ""
+    insurance_number_quote: str = ""
+    insurance_number_confidence: float = 0.0
+
+    insurance_date: str = ""  # Format: YYYY-MM-DD
+    insurance_date_quote: str = ""
+    insurance_date_confidence: float = 0.0
+
+    insured_amount: str = ""
+    insured_amount_quote: str = ""
+    insured_amount_confidence: float = 0.0
+
+    currency: str = ""
+    currency_quote: str = ""
+    currency_confidence: float = 0.0
+
+    insured_name: str = ""
+    insured_name_quote: str = ""
+    insured_name_confidence: float = 0.0
+
+    invoice_number: str = ""
+    invoice_number_quote: str = ""
+    invoice_number_confidence: float = 0.0
+
+    signature_present: str = ""  # "PRESENT" or "MISSING"
+    signature_present_quote: str = ""
+    signature_present_confidence: float = 0.0
+
+    @field_validator(
+        "insurance_number_confidence",
+        "insurance_date_confidence",
+        "insured_amount_confidence",
+        "currency_confidence",
+        "insured_name_confidence",
+        "invoice_number_confidence",
+        "signature_present_confidence",
+        mode="before"
+    )
+    @classmethod
+    def clamp_insurance_confidence(cls, v: float) -> float:
+        return _clamp_confidence(v)
+
+
 class Discrepancy(BaseModel):
     field: str
     actual_value: str
@@ -313,6 +357,7 @@ class CheckLCResponse(BaseModel):
     extracted_pl: Optional[PLExtracted] = None
     extracted_co: Optional[COExtracted] = None
     extracted_cq: Optional[CQExtracted] = None
+    extracted_insurance: Optional[InsuranceExtracted] = None
     discrepancies: List[Discrepancy]
     layer1_discrepancies: List[Discrepancy] = []
     cross_discrepancies: List[Discrepancy] = []

@@ -9,7 +9,7 @@ import base64
 from typing import Optional
 from datetime import datetime
 from openai import AsyncOpenAI
-from .schemas import ExtractedDocument, Discrepancy, BLExtracted, PLExtracted, COExtracted, CQExtracted
+from .schemas import ExtractedDocument, Discrepancy, BLExtracted, PLExtracted, COExtracted, CQExtracted, InsuranceExtracted
 
 # Initialize single shared Async OpenAI Client (reused across all agents)
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY") or "mock-key-for-local-testing")
@@ -465,12 +465,80 @@ async def audit_cq(image_base64: str, extracted: CQExtracted) -> CQExtracted:
     )
     return response.choices[0].message.parsed
 
+
+async def analyze_insurance_with_ai(image_base64: str) -> InsuranceExtracted:
+    """
+    Agent 1 (Extractor) for Insurance Certificate.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng thư bảo hiểm (Insurance Certificate) thanh toán quốc tế (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích hình ảnh được cung cấp và điền vào cấu trúc JSON InsuranceExtracted.\n"
+        "Các trường cần bóc tách:\n"
+        "- insurance_number: Số chứng thư bảo hiểm (Policy/Certificate No.)\n"
+        "- insurance_date: Ngày phát hành chứng thư bảo hiểm (Format: YYYY-MM-DD)\n"
+        "- insured_amount: Số tiền bảo hiểm\n"
+        "- currency: Loại tiền tệ của số tiền bảo hiểm\n"
+        "- insured_name: Tên bên được bảo hiểm (Insured party)\n"
+        "- invoice_number: Số hóa đơn thương mại được tham chiếu\n"
+        "- signature_present: Sự hiện diện của chữ ký/đóng dấu xác nhận ('PRESENT' hoặc 'MISSING')\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ Chứng thư bảo hiểm này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                    }
+                ]
+            }
+        ],
+        response_format=InsuranceExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def audit_insurance(image_base64: str, extracted: InsuranceExtracted) -> InsuranceExtracted:
+    """
+    Agent 2 (Auditor) for Insurance Certificate.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra Chứng thư bảo hiểm (Insurance Certificate) (Agent 2).\n"
+        "Nhiệm vụ: Nhận dữ liệu bóc tách đề xuất từ Agent 1 và đối chiếu lại với hình ảnh chứng thư bảo hiểm gốc để kiểm toán.\n"
+        "Hãy rà soát kỹ số hiệu bảo hiểm, ngày phát hành, số tiền bảo hiểm, loại tiền tệ, tên bên được bảo hiểm và chữ ký xem có chính xác 100% không. Cập nhật lại giá trị và độ tự tin (confidence) tương ứng nếu có sai sót.\n"
+        "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc InsuranceExtracted JSON."
+    )
+    user_content = [
+        {"type": "text", "text": f"Dữ liệu đề xuất từ Agent 1:\n{extracted.model_dump_json(indent=2)}\n\nHãy đối chiếu kỹ với hình ảnh gốc để kiểm toán:"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        }
+    ]
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        response_format=InsuranceExtracted
+    )
+    return response.choices[0].message.parsed
+
 def validate_layer1(
     invoice: ExtractedDocument,
     bl: Optional[BLExtracted],
     pl: Optional[PLExtracted],
     co: Optional[COExtracted] = None,
-    cq: Optional[CQExtracted] = None
+    cq: Optional[CQExtracted] = None,
+    insurance: Optional[InsuranceExtracted] = None
 ) -> list[Discrepancy]:
     """
     Layer 1: Document-level Validation (Kiểm tra nội bộ từng chứng từ)
@@ -616,6 +684,22 @@ def validate_layer1(
         if cq.signature_present != "PRESENT":
             discrepancies.append(Discrepancy(field="cq_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký / con dấu của bên kiểm định C/Q", severity="Error"))
 
+    # --- 1F. Insurance Certificate ---
+    if insurance:
+        if not insurance.insurance_number.strip():
+            discrepancies.append(Discrepancy(field="insurance_number", actual_value="Trống", expected_value="Phải có", reason="Insurance Certificate Number không được để trống", severity="Error"))
+
+        if not insurance.insurance_date.strip():
+            discrepancies.append(Discrepancy(field="insurance_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="Insurance Date không được để trống", severity="Error"))
+        else:
+            try:
+                datetime.strptime(insurance.insurance_date.strip(), "%Y-%m-%d")
+            except ValueError:
+                discrepancies.append(Discrepancy(field="insurance_date", actual_value=insurance.insurance_date, expected_value="Định dạng YYYY-MM-DD", reason="Insurance Date định dạng ngày không hợp lệ", severity="Error"))
+
+        if insurance.signature_present != "PRESENT":
+            discrepancies.append(Discrepancy(field="insurance_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký / con dấu của tổ chức phát hành Chứng thư bảo hiểm", severity="Error"))
+
     return discrepancies
 
 def cross_check_documents(
@@ -623,7 +707,8 @@ def cross_check_documents(
     bl: Optional[BLExtracted],
     pl: Optional[PLExtracted],
     co: Optional[COExtracted] = None,
-    cq: Optional[CQExtracted] = None
+    cq: Optional[CQExtracted] = None,
+    insurance: Optional[InsuranceExtracted] = None
 ) -> list[Discrepancy]:
     """
     Layer 2: Cross-check documents consistency (Invoice vs B/L vs Packing List)
@@ -862,6 +947,30 @@ def cross_check_documents(
                     severity="Error"
                 ))
 
+    # 6. Insurance Certificate Cross-checks
+    if insurance:
+        if invoice.invoice_number and insurance.invoice_number:
+            if invoice.invoice_number.strip().lower() != insurance.invoice_number.strip().lower():
+                discrepancies.append(Discrepancy(
+                    field="cross_insurance_invoice_number",
+                    actual_value=insurance.invoice_number,
+                    expected_value=invoice.invoice_number,
+                    reason="Số hóa đơn tham chiếu trên Chứng thư bảo hiểm không khớp với Hóa đơn thương mại",
+                    severity="Error"
+                ))
+
+        if invoice.beneficiary_name and insurance.insured_name:
+            inv_ben = invoice.beneficiary_name.strip().lower()
+            ins_name = insurance.insured_name.strip().lower()
+            if inv_ben != ins_name and inv_ben not in ins_name and ins_name not in inv_ben:
+                discrepancies.append(Discrepancy(
+                    field="cross_insurance_insured_beneficiary",
+                    actual_value=insurance.insured_name,
+                    expected_value=invoice.beneficiary_name,
+                    reason="Tên bên được bảo hiểm không tương đồng với tên Beneficiary trên Hóa đơn",
+                    severity="Error"
+                ))
+
     return discrepancies
 
 def compare_lc(
@@ -869,7 +978,8 @@ def compare_lc(
     extracted: ExtractedDocument,
     bl: Optional[BLExtracted] = None,
     co: Optional[COExtracted] = None,
-    cq: Optional[CQExtracted] = None
+    cq: Optional[CQExtracted] = None,
+    insurance: Optional[InsuranceExtracted] = None
 ) -> list[Discrepancy]:
     """
     Compares the audited extracted values from the invoice (and B/L) against L/C terms and returns a list of discrepancies.
@@ -1115,6 +1225,44 @@ def compare_lc(
                         severity="Error"
                     )
                 )
+
+    # 14. Insurance Certificate L/C Compliance
+    if insurance:
+        lc_currency = lc_terms.get("currency")
+        if lc_currency and insurance.currency:
+            if lc_currency.strip().upper() != insurance.currency.strip().upper():
+                discrepancies.append(
+                    Discrepancy(
+                        field="insurance_currency_compliance",
+                        actual_value=insurance.currency,
+                        expected_value=lc_currency,
+                        reason="Đơn vị tiền tệ trên Chứng thư bảo hiểm không khớp với L/C",
+                        severity="Error"
+                    )
+                )
+
+        shipment_date_str = None
+        if bl and bl.on_board_date:
+            shipment_date_str = bl.on_board_date
+        else:
+            shipment_date_str = lc_terms.get("latest_shipment")
+
+        if shipment_date_str and insurance.insurance_date:
+            try:
+                ins_dt = datetime.strptime(insurance.insurance_date.strip(), "%Y-%m-%d")
+                ship_dt = datetime.strptime(shipment_date_str.strip(), "%Y-%m-%d")
+                if ins_dt > ship_dt:
+                    discrepancies.append(
+                        Discrepancy(
+                            field="insurance_date_compliance",
+                            actual_value=f"Ngày bảo hiểm ({insurance.insurance_date}) muộn hơn Ngày giao hàng ({shipment_date_str})",
+                            expected_value="Ngày bảo hiểm phải bằng hoặc trước Ngày giao hàng",
+                            reason="Chứng thư bảo hiểm phát hành muộn hơn ngày bốc hàng lên tàu (vi phạm UCP 600)",
+                            severity="Error"
+                        )
+                    )
+            except ValueError:
+                pass
 
     return discrepancies
 
@@ -1419,6 +1567,29 @@ async def analyze_cq_with_ai_text(text: str) -> CQExtracted:
             {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản chứng nhận chất lượng sau:\n\n{text}"}
         ],
         response_format=CQExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_insurance_with_ai_text(text: str) -> InsuranceExtracted:
+    """
+    Extracts Insurance Certificate data from text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng thư bảo hiểm (Insurance Certificate) thanh toán quốc tế từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Phân tích nội dung văn bản chứng thư bảo hiểm được cung cấp và điền vào cấu trúc JSON InsuranceExtracted.\n"
+        "Bóc tách các trường: insurance_number, insurance_date, insured_amount, currency, insured_name, invoice_number, "
+        "signature_present ('PRESENT' hoặc 'MISSING'), và kèm theo quote cùng confidence score cho từng trường.\n"
+        "Hãy điền chính xác, không tự bịa dữ liệu."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản chứng thư bảo hiểm sau:\n\n{text}"}
+        ],
+        response_format=InsuranceExtracted
     )
     return response.choices[0].message.parsed
 

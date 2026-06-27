@@ -6,7 +6,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from .schemas import CheckLCResponse, AuditLogSchema, ExtractedDocument, BLExtracted, PLExtracted, COExtracted, CQExtracted
+from .schemas import CheckLCResponse, AuditLogSchema, ExtractedDocument, BLExtracted, PLExtracted, COExtracted, CQExtracted, InsuranceExtracted
 from .services import (
     pdf_to_base64_image, analyze_document_with_ai, audit_extracted_document, compare_lc, generate_waiver_draft,
     classify_document, analyze_bill_of_lading_with_ai, audit_bill_of_lading, analyze_packing_list_with_ai, audit_packing_list, cross_check_documents,
@@ -14,7 +14,7 @@ from .services import (
     extract_docx_text, classify_document_text, analyze_document_with_ai_text,
     analyze_bill_of_lading_with_ai_text, analyze_packing_list_with_ai_text,
     analyze_co_with_ai_text, analyze_cq_with_ai_text, analyze_lc_with_ai_text,
-    extract_doc_text
+    extract_doc_text, analyze_insurance_with_ai, analyze_insurance_with_ai_text, audit_insurance
 )
 from .swift_parser import parse_swift_mt700
 from .database import init_db, add_audit_log, get_audit_logs, clear_audit_logs
@@ -80,7 +80,8 @@ async def parse_swift(input_data: SWIFTInput):
 @app.post("/api/v1/check-lc")
 async def check_lc(
     files: List[UploadFile] = File(...),
-    lc_rules: str = Form(...)  # Expected JSON string containing L/C terms
+    lc_rules: str = Form(...),  # Expected JSON string containing L/C terms
+    file_types: Optional[str] = Form(None)  # JSON mapping of filename to type
 ):
     # Pre-read all file bytes to prevent closed file issues when streaming response is evaluated
     files_data = []
@@ -99,12 +100,20 @@ async def check_lc(
                 yield json.dumps({"type": "error", "msg": "lc_rules không phải là định dạng JSON hợp lệ."}) + "\n"
                 return
 
+            file_types_map = {}
+            if file_types:
+                try:
+                    file_types_map = json.loads(file_types)
+                except Exception as e:
+                    logger.error(f"Error parsing file_types form data: {e}")
+
             # Keep track of extracted documents
             invoice_doc = None
             bl_doc = None
             pl_doc = None
             co_doc = None
             cq_doc = None
+            insurance_doc = None
 
             # Render all files to base64 and classify them
             for idx, (filename, file_bytes) in enumerate(files_data, 1):
@@ -123,7 +132,9 @@ async def check_lc(
                         yield json.dumps({"type": "error", "msg": f"Không thể bóc tách văn bản từ file {filename}: {str(e)}"}) + "\n"
                         return
 
-                    doc_type = await classify_document_text(text)
+                    doc_type = file_types_map.get(filename)
+                    if not doc_type:
+                        doc_type = await classify_document_text(text)
                     yield json.dumps({"type": "progress", "msg": f"  - Kết quả phân loại văn bản: {doc_type}"}) + "\n"
                     await asyncio.sleep(0.3)
 
@@ -142,6 +153,9 @@ async def check_lc(
                     elif doc_type == "CQ":
                         yield json.dumps({"type": "progress", "msg": "  - Agent: Bóc tách Chứng nhận chất lượng (C/Q) từ văn bản..."}) + "\n"
                         cq_doc = await analyze_cq_with_ai_text(text)
+                    elif doc_type == "INSURANCE":
+                        yield json.dumps({"type": "progress", "msg": "  - Agent: Bóc tách Chứng thư bảo hiểm từ văn bản..."}) + "\n"
+                        insurance_doc = await analyze_insurance_with_ai_text(text)
                 else:
                     try:
                         image_base64, selected_page_idx, total_pages = await pdf_to_base64_image(file_bytes)
@@ -149,7 +163,9 @@ async def check_lc(
                         yield json.dumps({"type": "error", "msg": f"Không thể render file {filename} thành ảnh: {str(e)}"}) + "\n"
                         return
 
-                    doc_type = await classify_document(image_base64)
+                    doc_type = file_types_map.get(filename)
+                    if not doc_type:
+                        doc_type = await classify_document(image_base64)
                     yield json.dumps({"type": "progress", "msg": f"  - Kết quả phân loại: {doc_type} (Trang {selected_page_idx + 1}/{total_pages})"}) + "\n"
                     await asyncio.sleep(0.3)
 
@@ -236,6 +252,21 @@ async def check_lc(
                         else:
                             cq_doc = extracted_cq
 
+                    elif doc_type == "INSURANCE":
+                        yield json.dumps({"type": "progress", "msg": "  - Agent 1: Bóc tách Chứng thư bảo hiểm (GPT-4o Vision)..."}) + "\n"
+                        extracted_insurance = await analyze_insurance_with_ai(image_base64)
+                        
+                        # Audit Insurance
+                        if extracted_insurance.insurance_number_confidence < 0.85 or extracted_insurance.insurance_date_confidence < 0.85:
+                            yield json.dumps({"type": "progress", "msg": "  - Agent 2: Kiểm toán độc lập Chứng thư bảo hiểm (GPT-4o Vision)..."}) + "\n"
+                            try:
+                                insurance_doc = await audit_insurance(image_base64, extracted_insurance)
+                            except Exception as e:
+                                logger.warning("Insurance audit failed: %s", str(e))
+                                insurance_doc = extracted_insurance
+                        else:
+                            insurance_doc = extracted_insurance
+
             # Fallback if no invoice was uploaded
             if not invoice_doc:
                 # If no invoice was identified, initialize a dummy invoice so compare_lc runs
@@ -245,17 +276,17 @@ async def check_lc(
             # 3. internal check (Layer 1)
             yield json.dumps({"type": "progress", "msg": "3. Đang chạy thuật toán kiểm tra nội bộ từng chứng từ (Layer 1)..."}) + "\n"
             await asyncio.sleep(0.4)
-            layer1_discrepancies = validate_layer1(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc)
+            layer1_discrepancies = validate_layer1(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc, insurance_doc)
 
             # 4. Compare with L/C Rules (Layer 3)
             yield json.dumps({"type": "progress", "msg": "4. Đang chạy thuật toán đối chiếu L/C (Layer 3)..."}) + "\n"
             await asyncio.sleep(0.4)
-            discrepancies = compare_lc(lc_terms, invoice_doc, bl_doc, co_doc, cq_doc)
+            discrepancies = compare_lc(lc_terms, invoice_doc, bl_doc, co_doc, cq_doc, insurance_doc)
 
             # 5. Cross-check documents (Layer 2)
             yield json.dumps({"type": "progress", "msg": "5. Đang chạy thuật toán đối chiếu chéo chứng từ (Layer 2)..."}) + "\n"
             await asyncio.sleep(0.4)
-            cross_discrepancies = cross_check_documents(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc)
+            cross_discrepancies = cross_check_documents(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc, insurance_doc)
 
             # Check if any discrepancies are absolute (e.g. late presentation date)
             cannot_waive = any(d.severity == "Absolute" for d in discrepancies)
@@ -275,6 +306,7 @@ async def check_lc(
                 "extracted_pl": pl_doc.model_dump() if pl_doc else None,
                 "extracted_co": co_doc.model_dump() if co_doc else None,
                 "extracted_cq": cq_doc.model_dump() if cq_doc else None,
+                "extracted_insurance": insurance_doc.model_dump() if insurance_doc else None,
                 "discrepancies": [d.model_dump() for d in discrepancies],
                 "layer1_discrepancies": [d.model_dump() for d in layer1_discrepancies],
                 "cross_discrepancies": [d.model_dump() for d in cross_discrepancies],
@@ -295,6 +327,7 @@ class ValidationInput(BaseModel):
     extracted_pl: Optional[PLExtracted] = None
     extracted_co: Optional[COExtracted] = None
     extracted_cq: Optional[CQExtracted] = None
+    extracted_insurance: Optional[InsuranceExtracted] = None
 
 @app.post("/api/v1/validate-documents")
 async def validate_documents(input_data: ValidationInput):
@@ -307,11 +340,12 @@ async def validate_documents(input_data: ValidationInput):
         pl_doc = input_data.extracted_pl
         co_doc = input_data.extracted_co
         cq_doc = input_data.extracted_cq
+        insurance_doc = input_data.extracted_insurance
         lc_terms = input_data.lc_rules
 
-        layer1_discrepancies = validate_layer1(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc)
-        discrepancies = compare_lc(lc_terms, invoice_doc, bl_doc, co_doc, cq_doc)
-        cross_discrepancies = cross_check_documents(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc)
+        layer1_discrepancies = validate_layer1(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc, insurance_doc)
+        discrepancies = compare_lc(lc_terms, invoice_doc, bl_doc, co_doc, cq_doc, insurance_doc)
+        cross_discrepancies = cross_check_documents(invoice_doc, bl_doc, pl_doc, co_doc, cq_doc, insurance_doc)
 
         cannot_waive = any(d.severity == "Absolute" for d in discrepancies)
         all_discrepancies = discrepancies + cross_discrepancies + layer1_discrepancies

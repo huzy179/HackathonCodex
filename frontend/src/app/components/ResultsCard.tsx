@@ -432,59 +432,86 @@ const ResultsCardInner: React.FC<ResultsCardProps & { emailCopied: boolean; hand
           </div>
 
           {activeTab === "lc" ? (
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-slate-100 text-xs text-slate-500 uppercase tracking-wider">
-                    <th className="pb-3 font-bold pl-4">Thuộc tính đối chiếu</th>
-                    <th className="pb-3 font-bold">Yêu cầu L/C</th>
-                    <th className="pb-3 font-bold">Chứng từ thực tế</th>
-                    <th className="pb-3 font-bold text-center">Trạng thái</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {["beneficiary_name", "applicant_name", "total_amount", "currency", "shipment_date", "port_of_loading", "port_of_discharge", "incoterms", "goods_description"].map(field => {
-                    const status = getFieldStatus(field);
-                    if (!status) return null;
+            <div className="space-y-3">
+              {["beneficiary_name", "applicant_name", "total_amount", "currency", "shipment_date", "port_of_loading", "port_of_discharge", "incoterms", "goods_description"].map(field => {
+                const status = getFieldStatus(field);
+                if (!status) return null;
 
-                    const labels: Record<string, string> = {
-                      beneficiary_name: "Người thụ hưởng",
-                      applicant_name: "Người mua (Applicant)",
-                      total_amount: "Tổng số tiền",
-                      currency: "Đồng tiền",
-                      shipment_date: "Ngày giao hàng",
-                      port_of_loading: "Cảng bốc hàng",
-                      port_of_discharge: "Cảng dỡ hàng",
-                      incoterms: "Incoterms",
-                      goods_description: "Mô tả hàng hóa"
-                    };
+                const labels: Record<string, string> = {
+                  beneficiary_name: "Người thụ hưởng",
+                  applicant_name: "Người mua (Applicant)",
+                  total_amount: "Tổng số tiền",
+                  currency: "Đồng tiền",
+                  shipment_date: "Ngày giao hàng",
+                  port_of_loading: "Cảng bốc hàng",
+                  port_of_discharge: "Cảng dỡ hàng",
+                  incoterms: "Incoterms",
+                  goods_description: "Mô tả hàng hóa"
+                };
 
-                    return (
-                      <React.Fragment key={field}>
-                        <tr className={`transition-colors ${status.isValid ? "bg-emerald-50/20 hover:bg-emerald-50/40" : "bg-rose-50/30 hover:bg-rose-50/50"}`}>
-                          <td className="py-4 pl-4 font-bold text-slate-700">{labels[field]}</td>
-                          <td className="py-4 text-slate-500 font-mono text-xs">{status.expected}</td>
-                          <td className="py-4 font-mono text-xs text-slate-800">{status.actual}</td>
-                          <td className="py-4 text-center">
-                            {status.isValid ? (
-                              <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200"><CheckCircle className="h-4 w-4" /></span>
-                            ) : (
-                              <span className={`inline-flex items-center justify-center h-6 w-6 rounded-full ${status.severity === "Warning" ? "bg-amber-100 text-amber-700 border border-amber-200" : "bg-rose-100 text-rose-700 border border-rose-200"}`}>
-                                {status.severity === "Warning" ? <AlertTriangle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                        {!status.isValid && (
-                          <tr className="bg-rose-50/10">
-                            <td colSpan={4} className="py-2.5 px-4 text-xs text-rose-700 font-semibold italic border-l-2 border-rose-500">{status.reason}</td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+                const isWarn = !status.isValid && status.severity === "Warning";
+                const isError = !status.isValid && status.severity !== "Warning";
+
+                return (
+                  <div key={field} className={`rounded-xl border p-4 transition-colors ${
+                    status.isValid
+                      ? "bg-emerald-50/30 border-emerald-100"
+                      : isWarn
+                        ? "bg-amber-50/30 border-amber-200"
+                        : "bg-rose-50/20 border-rose-200"
+                  }`}>
+                    {/* Header: field name + status icon */}
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-bold text-slate-800">{labels[field]}</span>
+                      {status.isValid ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded-full px-2.5 py-1">
+                          <CheckCircle className="h-3.5 w-3.5" /> Khớp
+                        </span>
+                      ) : isWarn ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-100 border border-amber-200 rounded-full px-2.5 py-1">
+                          <AlertTriangle className="h-3.5 w-3.5" /> Cảnh báo
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 bg-rose-100 border border-rose-200 rounded-full px-2.5 py-1">
+                          <XCircle className="h-3.5 w-3.5" /> Không khớp
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Comparison: L/C requirement vs actual */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-1.5">Yêu cầu L/C</div>
+                        <div className="text-xs text-slate-600 bg-white/80 rounded-lg px-3 py-2 border border-slate-100 leading-relaxed min-h-9">
+                          {status.expected}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-1.5">Chứng từ thực tế</div>
+                        <div className={`text-xs rounded-lg px-3 py-2 border leading-relaxed min-h-9 font-semibold ${
+                          status.isValid
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-100"
+                            : isWarn
+                              ? "bg-amber-50 text-amber-800 border-amber-100"
+                              : "bg-rose-50 text-rose-800 border-rose-100"
+                        }`}>
+                          {status.actual}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Error reason */}
+                    {!status.isValid && status.reason && (
+                      <div className={`mt-2.5 flex items-start gap-2 text-xs font-semibold rounded-lg px-3 py-2 ${
+                        isWarn ? "text-amber-800 bg-amber-50/60" : "text-rose-700 bg-rose-50/60"
+                      }`}>
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>{status.reason}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : activeTab === "cross" ? (
             <div className="space-y-4">

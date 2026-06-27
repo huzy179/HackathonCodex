@@ -13,7 +13,8 @@ from .services import (
     analyze_lc_with_ai, validate_layer1, analyze_co_with_ai, audit_co, analyze_cq_with_ai, audit_cq,
     extract_docx_text, classify_document_text, analyze_document_with_ai_text,
     analyze_bill_of_lading_with_ai_text, analyze_packing_list_with_ai_text,
-    analyze_co_with_ai_text, analyze_cq_with_ai_text, analyze_lc_with_ai_text
+    analyze_co_with_ai_text, analyze_cq_with_ai_text, analyze_lc_with_ai_text,
+    extract_doc_text
 )
 from .swift_parser import parse_swift_mt700
 from .database import init_db, add_audit_log, get_audit_logs, clear_audit_logs
@@ -109,10 +110,15 @@ async def check_lc(
             for idx, (filename, file_bytes) in enumerate(files_data, 1):
                 yield json.dumps({"type": "progress", "msg": f"2.{idx} Đang đọc và phân loại file: {filename}..."}) + "\n"
                 
-                if filename.lower().endswith(".docx"):
-                    yield json.dumps({"type": "progress", "msg": "  - Tệp Word (DOCX) được phát hiện. Đang bóc tách văn bản..."}) + "\n"
+                if filename.lower().endswith((".docx", ".doc")):
+                    is_docx = filename.lower().endswith(".docx")
+                    doc_label = "DOCX" if is_docx else "DOC"
+                    yield json.dumps({"type": "progress", "msg": f"  - Tệp Word ({doc_label}) được phát hiện. Đang bóc tách văn bản..."}) + "\n"
                     try:
-                        text = extract_docx_text(file_bytes)
+                        if is_docx:
+                            text = extract_docx_text(file_bytes)
+                        else:
+                            text = extract_doc_text(file_bytes)
                     except Exception as e:
                         yield json.dumps({"type": "error", "msg": f"Không thể bóc tách văn bản từ file {filename}: {str(e)}"}) + "\n"
                         return
@@ -333,15 +339,19 @@ async def extract_lc_file(file: UploadFile = File(...)):
         file_bytes = await file.read()
         filename = file.filename
         
-        if filename.lower().endswith(".docx"):
-            text = extract_docx_text(file_bytes)
+        if filename.lower().endswith((".docx", ".doc")):
+            is_docx = filename.lower().endswith(".docx")
+            if is_docx:
+                text = extract_docx_text(file_bytes)
+            else:
+                text = extract_doc_text(file_bytes)
             doc_type = await classify_document_text(text)
             lc_terms = await analyze_lc_with_ai_text(text)
             return {
                 "status": "success",
                 "lc_terms": lc_terms.model_dump(),
                 "doc_type": doc_type,
-                "page_info": "Tệp Word (DOCX)"
+                "page_info": f"Tệp Word ({'DOCX' if is_docx else 'DOC'})"
             }
         else:
             image_base64, selected_page_idx, total_pages = await pdf_to_base64_image(file_bytes)

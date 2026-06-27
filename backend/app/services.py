@@ -1203,6 +1203,30 @@ async def analyze_lc_with_ai(image_base64: str) -> "LCTermsSchema":
     return response.choices[0].message.parsed
 
 
+def extract_doc_text(file_bytes: bytes) -> str:
+    """
+    Extracts text from legacy DOC file bytes using antiword command-line utility.
+    """
+    import subprocess
+    import tempfile
+    import os
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".doc") as temp_file:
+        temp_file.write(file_bytes)
+        temp_path = temp_file.name
+
+    try:
+        result = subprocess.run(["antiword", temp_path], capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Lỗi khi chạy antiword: {e.stderr or e.output}")
+    except FileNotFoundError:
+        raise RuntimeError("Tiện ích antiword chưa được cài đặt trên hệ thống.")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 def extract_docx_text(file_bytes: bytes) -> str:
     """
     Extracts text and table content from DOCX file bytes, preserving the logical order.

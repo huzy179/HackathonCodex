@@ -9,7 +9,7 @@ import base64
 from typing import Optional
 from datetime import datetime
 from openai import AsyncOpenAI
-from .schemas import ExtractedDocument, Discrepancy, BLExtracted, PLExtracted
+from .schemas import ExtractedDocument, Discrepancy, BLExtracted, PLExtracted, COExtracted, CQExtracted
 
 # Initialize single shared Async OpenAI Client (reused across all agents)
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY") or "mock-key-for-local-testing")
@@ -148,7 +148,7 @@ async def audit_extracted_document(image_base64: str, extracted: ExtractedDocume
 async def classify_document(image_base64: str) -> str:
     """
     Uses GPT-4o to classify the document image into:
-    "INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", or "UNKNOWN".
+    "INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", "CO", "CQ", or "UNKNOWN".
     """
     system_prompt = (
         "Bạn là trợ lý phân loại chứng từ thương mại quốc tế.\n"
@@ -157,8 +157,10 @@ async def classify_document(image_base64: str) -> str:
         "- 'BILL_OF_LADING': Vận đơn đường biển (Bill of Lading / B/L).\n"
         "- 'PACKING_LIST': Phiếu đóng gói hàng hóa (Packing List).\n"
         "- 'LETTER_OF_CREDIT': Thư tín dụng (Letter of Credit / L/C / MT700).\n"
+        "- 'CO': Chứng nhận xuất xứ (Certificate of Origin / C/O).\n"
+        "- 'CQ': Chứng nhận chất lượng (Certificate of Quality / C/Q).\n"
         "- 'UNKNOWN': Tài liệu khác.\n"
-        "Chỉ trả ra đúng một trong 5 từ khóa trên ở định dạng chữ in hoa."
+        "Chỉ trả ra đúng một trong các từ khóa trên ở định dạng chữ in hoa."
     )
     try:
         response = await client.chat.completions.create(
@@ -181,7 +183,7 @@ async def classify_document(image_base64: str) -> str:
             temperature=0.0
         )
         val = response.choices[0].message.content.strip().upper()
-        if val in ["INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT"]:
+        if val in ["INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", "CO", "CQ"]:
             return val
         return "UNKNOWN"
     except Exception:
@@ -329,10 +331,146 @@ async def audit_packing_list(image_base64: str, extracted: PLExtracted) -> PLExt
     )
     return response.choices[0].message.parsed
 
+async def analyze_co_with_ai(image_base64: str) -> COExtracted:
+    """
+    Agent 1 (Extractor) for Certificate of Origin (C/O).
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng nhận xuất xứ (Certificate of Origin - C/O) thanh toán quốc tế (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích hình ảnh được cung cấp và điền vào cấu trúc JSON COExtracted.\n"
+        "Các trường cần bóc tách:\n"
+        "- co_number: Số chứng nhận xuất xứ (C/O No.)\n"
+        "- co_date: Ngày phát hành C/O (Format: YYYY-MM-DD)\n"
+        "- country_of_origin: Quốc gia xuất xứ (Country of Origin, ví dụ: Vietnam, China...)\n"
+        "- invoice_number: Số hóa đơn thương mại được tham chiếu trên C/O\n"
+        "- shipper_name: Tên của người giao hàng (Shipper/Exporter)\n"
+        "- consignee_name: Tên của người nhận hàng (Consignee)\n"
+        "- goods_description: Mô tả hàng hóa\n"
+        "- signature_present: Sự hiện diện của chữ ký & đóng dấu xác nhận ('PRESENT' hoặc 'MISSING')\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ C/O này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        response_format=COExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def audit_co(image_base64: str, extracted: COExtracted) -> COExtracted:
+    """
+    Agent 2 (Auditor) for Certificate of Origin (C/O).
+    """
+    system_prompt = (
+        "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra Chứng nhận xuất xứ (C/O) (Agent 2).\n"
+        "Nhiệm vụ: Nhận dữ liệu bóc tách đề xuất từ Agent 1 và đối chiếu lại với hình ảnh C/O gốc để kiểm toán.\n"
+        "Hãy rà soát kỹ số hiệu, ngày tháng, tên các bên, xuất xứ và chữ ký xem có chính xác 100% không. Cập nhật lại giá trị và độ tự tin (confidence) tương ứng nếu có sai sót.\n"
+        "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc COExtracted JSON."
+    )
+    user_content = [
+        {"type": "text", "text": f"Dữ liệu đề xuất từ Agent 1:\n{extracted.model_dump_json(indent=2)}\n\nHãy đối chiếu kỹ với hình ảnh gốc để kiểm toán:"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        }
+    ]
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        response_format=COExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def analyze_cq_with_ai(image_base64: str) -> CQExtracted:
+    """
+    Agent 1 (Extractor) for Certificate of Quality (C/Q).
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng nhận chất lượng (Certificate of Quality - C/Q) thanh toán quốc tế (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích hình ảnh được cung cấp và điền vào cấu trúc JSON CQExtracted.\n"
+        "Các trường cần bóc tách:\n"
+        "- cq_number: Số chứng nhận chất lượng (C/Q No.)\n"
+        "- cq_date: Ngày phát hành C/Q (Format: YYYY-MM-DD)\n"
+        "- goods_description: Mô tả hàng hóa\n"
+        "- invoice_number: Số hóa đơn thương mại được tham chiếu\n"
+        "- quality_statement: Nội dung cam kết chất lượng (ví dụ: 'goods are in good quality', 'complies with specifications'...)\n"
+        "- signature_present: Sự hiện diện của chữ ký & đóng dấu xác nhận ('PRESENT' hoặc 'MISSING')\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bóc tách dữ liệu từ C/Q này:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        response_format=CQExtracted
+    )
+    return response.choices[0].message.parsed
+
+async def audit_cq(image_base64: str, extracted: CQExtracted) -> CQExtracted:
+    """
+    Agent 2 (Auditor) for Certificate of Quality (C/Q).
+    """
+    system_prompt = (
+        "Bạn là chuyên gia Kiểm toán viên độc lập kiểm tra Chứng nhận chất lượng (C/Q) (Agent 2).\n"
+        "Nhiệm vụ: Nhận dữ liệu bóc tách đề xuất từ Agent 1 và đối chiếu lại với hình ảnh C/Q gốc để kiểm toán.\n"
+        "Hãy rà soát kỹ số hiệu, ngày tháng, mô tả hàng hóa, cam kết chất lượng và chữ ký xem có chính xác 100% không. Cập nhật lại giá trị và độ tự tin (confidence) tương ứng nếu có sai sót.\n"
+        "Đầu ra của bạn phải tuân thủ tuyệt đối cấu trúc CQExtracted JSON."
+    )
+    user_content = [
+        {"type": "text", "text": f"Dữ liệu đề xuất từ Agent 1:\n{extracted.model_dump_json(indent=2)}\n\nHãy đối chiếu kỹ với hình ảnh gốc để kiểm toán:"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        }
+    ]
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        response_format=CQExtracted
+    )
+    return response.choices[0].message.parsed
+
 def validate_layer1(
     invoice: ExtractedDocument,
     bl: Optional[BLExtracted],
-    pl: Optional[PLExtracted]
+    pl: Optional[PLExtracted],
+    co: Optional[COExtracted] = None,
+    cq: Optional[CQExtracted] = None
 ) -> list[Discrepancy]:
     """
     Layer 1: Document-level Validation (Kiểm tra nội bộ từng chứng từ)
@@ -440,12 +578,52 @@ def validate_layer1(
         if pl.packages_count <= 0:
             discrepancies.append(Discrepancy(field="pl_packages_count", actual_value=str(pl.packages_count), expected_value="> 0", reason="Số kiện/thùng (Number of Packages) phải là số dương", severity="Error"))
 
+    # --- 1D. Certificate of Origin (C/O) ---
+    if co:
+        if not co.co_number.strip():
+            discrepancies.append(Discrepancy(field="co_number", actual_value="Trống", expected_value="Phải có", reason="C/O Number không được để trống", severity="Error"))
+
+        if not co.co_date.strip():
+            discrepancies.append(Discrepancy(field="co_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="C/O Date không được để trống", severity="Error"))
+        else:
+            try:
+                datetime.strptime(co.co_date.strip(), "%Y-%m-%d")
+            except ValueError:
+                discrepancies.append(Discrepancy(field="co_date", actual_value=co.co_date, expected_value="Định dạng YYYY-MM-DD", reason="C/O Date định dạng ngày không hợp lệ", severity="Error"))
+
+        if not co.country_of_origin.strip():
+            discrepancies.append(Discrepancy(field="co_origin", actual_value="Trống", expected_value="Phải có", reason="Quốc gia xuất xứ (Country of Origin) không được để trống", severity="Error"))
+
+        if co.signature_present != "PRESENT":
+            discrepancies.append(Discrepancy(field="co_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký / con dấu của tổ chức phát hành C/O", severity="Error"))
+
+    # --- 1E. Certificate of Quality (C/Q) ---
+    if cq:
+        if not cq.cq_number.strip():
+            discrepancies.append(Discrepancy(field="cq_number", actual_value="Trống", expected_value="Phải có", reason="C/Q Number không được để trống", severity="Error"))
+
+        if not cq.cq_date.strip():
+            discrepancies.append(Discrepancy(field="cq_date", actual_value="Trống", expected_value="Định dạng YYYY-MM-DD", reason="C/Q Date không được để trống", severity="Error"))
+        else:
+            try:
+                datetime.strptime(cq.cq_date.strip(), "%Y-%m-%d")
+            except ValueError:
+                discrepancies.append(Discrepancy(field="cq_date", actual_value=cq.cq_date, expected_value="Định dạng YYYY-MM-DD", reason="C/Q Date định dạng ngày không hợp lệ", severity="Error"))
+
+        if not cq.quality_statement.strip():
+            discrepancies.append(Discrepancy(field="cq_statement", actual_value="Trống", expected_value="Phải có", reason="Cam kết/chứng nhận chất lượng không được để trống", severity="Error"))
+
+        if cq.signature_present != "PRESENT":
+            discrepancies.append(Discrepancy(field="cq_signature", actual_value="Vắng mặt / Không rõ", expected_value="PRESENT", reason="Thiếu chữ ký / con dấu của bên kiểm định C/Q", severity="Error"))
+
     return discrepancies
 
 def cross_check_documents(
     invoice: ExtractedDocument,
     bl: Optional[BLExtracted],
-    pl: Optional[PLExtracted]
+    pl: Optional[PLExtracted],
+    co: Optional[COExtracted] = None,
+    cq: Optional[CQExtracted] = None
 ) -> list[Discrepancy]:
     """
     Layer 2: Cross-check documents consistency (Invoice vs B/L vs Packing List)
@@ -589,9 +767,110 @@ def cross_check_documents(
                     except ValueError:
                         pass
 
+    # 4. Certificate of Origin (C/O) Cross-checks
+    if co:
+        # 4A. Invoice Number Match
+        if invoice.invoice_number and co.invoice_number:
+            if invoice.invoice_number.strip().lower() != co.invoice_number.strip().lower():
+                discrepancies.append(Discrepancy(
+                    field="cross_co_invoice_number",
+                    actual_value=co.invoice_number,
+                    expected_value=invoice.invoice_number,
+                    reason="Số hóa đơn tham chiếu trên C/O không khớp với Hóa đơn thương mại",
+                    severity="Error"
+                ))
+
+        # 4B. Shipper vs Beneficiary Match
+        if invoice.beneficiary_name and co.shipper_name:
+            inv_ben = invoice.beneficiary_name.strip().lower()
+            co_ship = co.shipper_name.strip().lower()
+            if inv_ben != co_ship and inv_ben not in co_ship and co_ship not in inv_ben:
+                discrepancies.append(Discrepancy(
+                    field="cross_co_shipper_beneficiary",
+                    actual_value=co.shipper_name,
+                    expected_value=invoice.beneficiary_name,
+                    reason="Tên Shipper trên C/O không tương đồng với tên Beneficiary trên Hóa đơn",
+                    severity="Error"
+                ))
+
+        # 4C. Shipper vs B/L Shipper Match
+        if bl and bl.shipper_name and co.shipper_name:
+            bl_ship = bl.shipper_name.strip().lower()
+            co_ship = co.shipper_name.strip().lower()
+            if bl_ship != co_ship and bl_ship not in co_ship and co_ship not in bl_ship:
+                discrepancies.append(Discrepancy(
+                    field="cross_co_shipper_bl_shipper",
+                    actual_value=co.shipper_name,
+                    expected_value=bl.shipper_name,
+                    reason="Tên Shipper trên C/O không khớp với trên Vận đơn B/L",
+                    severity="Error"
+                ))
+
+        # 4D. Consignee vs Invoice Applicant Match
+        if invoice.applicant_name and co.consignee_name:
+            inv_app = invoice.applicant_name.strip().lower()
+            co_con = co.consignee_name.strip().lower()
+            if inv_app != co_con and inv_app not in co_con and co_con not in inv_app:
+                discrepancies.append(Discrepancy(
+                    field="cross_co_consignee_applicant",
+                    actual_value=co.consignee_name,
+                    expected_value=invoice.applicant_name,
+                    reason="Tên Consignee trên C/O không khớp với tên Applicant trên Hóa đơn",
+                    severity="Error"
+                ))
+
+        # 4E. Goods Description Match
+        if invoice.goods_description and co.goods_description:
+            inv_goods = invoice.goods_description.strip().lower()
+            co_goods = co.goods_description.strip().lower()
+            inv_words = set(w for w in inv_goods.split() if len(w) > 3)
+            co_words = set(w for w in co_goods.split() if len(w) > 3)
+            if not inv_words.intersection(co_words) and inv_goods not in co_goods and co_goods not in inv_goods:
+                discrepancies.append(Discrepancy(
+                    field="cross_co_goods_invoice",
+                    actual_value=co.goods_description,
+                    expected_value=invoice.goods_description,
+                    reason="Mô tả hàng hóa trên C/O không tương đồng với trên Hóa đơn",
+                    severity="Error"
+                ))
+
+    # 5. Certificate of Quality (C/Q) Cross-checks
+    if cq:
+        # 5A. Invoice Number Match
+        if invoice.invoice_number and cq.invoice_number:
+            if invoice.invoice_number.strip().lower() != cq.invoice_number.strip().lower():
+                discrepancies.append(Discrepancy(
+                    field="cross_cq_invoice_number",
+                    actual_value=cq.invoice_number,
+                    expected_value=invoice.invoice_number,
+                    reason="Số hóa đơn tham chiếu trên C/Q không khớp với Hóa đơn thương mại",
+                    severity="Error"
+                ))
+
+        # 5B. Goods Description Match
+        if invoice.goods_description and cq.goods_description:
+            inv_goods = invoice.goods_description.strip().lower()
+            cq_goods = cq.goods_description.strip().lower()
+            inv_words = set(w for w in inv_goods.split() if len(w) > 3)
+            cq_words = set(w for w in cq_goods.split() if len(w) > 3)
+            if not inv_words.intersection(cq_words) and inv_goods not in cq_goods and cq_goods not in inv_goods:
+                discrepancies.append(Discrepancy(
+                    field="cross_cq_goods_invoice",
+                    actual_value=cq.goods_description,
+                    expected_value=invoice.goods_description,
+                    reason="Mô tả hàng hóa trên C/Q không tương đồng với trên Hóa đơn",
+                    severity="Error"
+                ))
+
     return discrepancies
 
-def compare_lc(lc_terms: dict, extracted: ExtractedDocument, bl: Optional[BLExtracted] = None) -> list[Discrepancy]:
+def compare_lc(
+    lc_terms: dict,
+    extracted: ExtractedDocument,
+    bl: Optional[BLExtracted] = None,
+    co: Optional[COExtracted] = None,
+    cq: Optional[CQExtracted] = None
+) -> list[Discrepancy]:
     """
     Compares the audited extracted values from the invoice (and B/L) against L/C terms and returns a list of discrepancies.
     """
@@ -821,6 +1100,22 @@ def compare_lc(lc_terms: dict, extracted: ExtractedDocument, bl: Optional[BLExtr
                 )
             )
 
+    # 13. Certificate of Origin (C/O) L/C Compliance
+    if co:
+        # Check if C/O Consignee matches L/C Applicant
+        lc_applicant = lc_terms.get("applicant_name")
+        if lc_applicant and co.consignee_name:
+            if lc_applicant.strip().lower() != co.consignee_name.strip().lower():
+                discrepancies.append(
+                    Discrepancy(
+                        field="co_consignee_compliance",
+                        actual_value=co.consignee_name,
+                        expected_value=lc_applicant,
+                        reason="Tên Consignee trên C/O không khớp với Applicant trong L/C",
+                        severity="Error"
+                    )
+                )
+
     return discrepancies
 
 async def generate_waiver_draft(discrepancies: list[Discrepancy], lc_terms: dict) -> str:
@@ -902,6 +1197,227 @@ async def analyze_lc_with_ai(image_base64: str) -> "LCTermsSchema":
                     }
                 ]
             }
+        ],
+        response_format=LCTermsSchema
+    )
+    return response.choices[0].message.parsed
+
+
+def extract_docx_text(file_bytes: bytes) -> str:
+    """
+    Extracts text and table content from DOCX file bytes, preserving the logical order.
+    """
+    import io
+    try:
+        from docx import Document
+        from docx.oxml.table import CT_Tbl
+        from docx.oxml.text.paragraph import CT_P
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ImportError:
+        raise ImportError("Thư viện python-docx chưa được cài đặt.")
+
+    doc = Document(io.BytesIO(file_bytes))
+    body = doc.element.body
+    text_parts = []
+    
+    for child in body:
+        if isinstance(child, CT_P):
+            p = Paragraph(child, doc)
+            if p.text.strip():
+                text_parts.append(p.text)
+        elif isinstance(child, CT_Tbl):
+            t = Table(child, doc)
+            for row in t.rows:
+                row_text = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
+                # Filter out adjacent duplicates due to merged cells
+                cleaned_row = []
+                for cell in row_text:
+                    if not cleaned_row or cleaned_row[-1] != cell:
+                        cleaned_row.append(cell)
+                if cleaned_row:
+                    text_parts.append(" | ".join(cleaned_row))
+                
+    return "\n".join(text_parts)
+
+
+async def classify_document_text(text: str) -> str:
+    """
+    Uses GPT-4o to classify the document text into:
+    "INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", "CO", "CQ", or "UNKNOWN".
+    """
+    system_prompt = (
+        "Bạn là trợ lý phân loại chứng từ thương mại quốc tế.\n"
+        "Hãy phân tích nội dung văn bản được cung cấp và xác định loại chứng từ này thuộc loại nào:\n"
+        "- 'INVOICE': Hóa đơn thương mại (Commercial Invoice).\n"
+        "- 'BILL_OF_LADING': Vận đơn đường biển (Bill of Lading / B/L).\n"
+        "- 'PACKING_LIST': Phiếu đóng gói hàng hóa (Packing List).\n"
+        "- 'LETTER_OF_CREDIT': Thư tín dụng (Letter of Credit / L/C / MT700).\n"
+        "- 'CO': Chứng nhận xuất xứ (Certificate of Origin / C/O).\n"
+        "- 'CQ': Chứng nhận chất lượng (Certificate of Quality / C/Q).\n"
+        "- 'UNKNOWN': Tài liệu khác.\n"
+        "Chỉ trả ra đúng một trong các từ khóa trên ở định dạng chữ in hoa."
+    )
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Phân loại chứng từ này từ nội dung văn bản sau:\n\n{text}"}
+            ],
+            temperature=0.0
+        )
+        val = response.choices[0].message.content.strip().upper()
+        if val in ["INVOICE", "BILL_OF_LADING", "PACKING_LIST", "LETTER_OF_CREDIT", "CO", "CQ"]:
+            return val
+        return "UNKNOWN"
+    except Exception:
+        return "UNKNOWN"
+
+
+async def analyze_document_with_ai_text(text: str) -> ExtractedDocument:
+    """
+    Extracts Commercial Invoice data from DOCX extracted text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu thanh toán quốc tế kiểm tra L/C từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích nội dung văn bản được cung cấp và điền vào cấu trúc JSON.\n"
+        "Đối với mỗi trường dữ liệu (ví dụ: invoice_number, total_amount...), bạn phải cung cấp:\n"
+        "1. Giá trị trích xuất thực tế (total_amount phải là số thực, shipment_date và invoice_date định dạng YYYY-MM-DD, quantity và unit_price là số thực).\n"
+        "2. ĐOẠN TRÍCH DẪN GỐC (exact quote/snippet) chứa con số hoặc thông tin đó hiển thị trong văn bản để làm minh chứng.\n"
+        "3. ĐIỂM TIN CẬY (confidence score) từ 0.0 đến 1.0. Vì đây là văn bản trích xuất trực tiếp nên thông thường điểm tin cậy rất cao (ví dụ: 0.95 đến 1.0) nếu thông tin xuất hiện rõ ràng.\n"
+        "Các trường thông tin cần bóc tách bao gồm: invoice_number, total_amount, currency, shipment_date, port_of_loading, "
+        "beneficiary_name, applicant_name, port_of_discharge, goods_description, incoterms, "
+        "invoice_date, beneficiary_address, applicant_address, quantity, unit_price, signature_present ('PRESENT' hoặc 'MISSING').\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản hóa đơn thương mại sau:\n\n{text}"}
+        ],
+        response_format=ExtractedDocument
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_bill_of_lading_with_ai_text(text: str) -> BLExtracted:
+    """
+    Extracts Bill of Lading data from DOCX extracted text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu vận đơn đường biển (Bill of Lading - B/L) thanh toán quốc tế từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Hãy phân tích nội dung văn bản vận đơn được cung cấp và điền vào cấu trúc JSON BLExtracted.\n"
+        "Đối với mỗi trường dữ liệu (ví dụ: shipper_name, port_of_loading, on_board_date...), bạn phải cung cấp:\n"
+        "1. Giá trị trích xuất thực tế (on_board_date và bl_date phải định dạng YYYY-MM-DD).\n"
+        "2. ĐOẠN TRÍCH DẪN GỐC (exact quote/snippet) chứa con số hoặc thông tin đó hiển thị trong văn bản để làm minh chứng.\n"
+        "3. ĐIỂM TIN CẬY (confidence score) từ 0.0 đến 1.0. Vì đây là văn bản trích xuất trực tiếp nên thông thường điểm tin cậy rất cao.\n"
+        "Các trường cần bóc tách: shipper_name, port_of_loading, on_board_date, bl_number, consignee_name, port_of_discharge, "
+        "goods_description, bl_date, carrier_name, gross_weight, measurement, signature_present ('PRESENT' hoặc 'MISSING').\n"
+        "Tuyệt đối không bịa dữ liệu. Nếu không nhìn thấy, hãy để chuỗi rỗng cho quote và giá trị mặc định."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản vận đơn đường biển sau:\n\n{text}"}
+        ],
+        response_format=BLExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_packing_list_with_ai_text(text: str) -> PLExtracted:
+    """
+    Extracts Packing List data from DOCX extracted text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu phiếu đóng gói (Packing List) thanh toán quốc tế từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Phân tích nội dung văn bản được cung cấp và điền vào cấu trúc JSON PLExtracted.\n"
+        "Bóc tách các trường: pl_number, pl_date, invoice_number, total_packages, gross_weight, net_weight, goods_name, "
+        "signature_present ('PRESENT' hoặc 'MISSING'), và kèm theo quote cùng confidence score cho từng trường.\n"
+        "Hãy điền chính xác, không tự bịa dữ liệu."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản phiếu đóng gói sau:\n\n{text}"}
+        ],
+        response_format=PLExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_co_with_ai_text(text: str) -> COExtracted:
+    """
+    Extracts Certificate of Origin data from DOCX extracted text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng nhận xuất xứ (Certificate of Origin - C/O) thanh toán quốc tế từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Phân tích nội dung văn bản C/O được cung cấp và điền vào cấu trúc JSON COExtracted.\n"
+        "Bóc tách các trường: co_number, co_date, country_of_origin, exporter_name, importer_name, goods_description, invoice_number, "
+        "signature_present ('PRESENT' hoặc 'MISSING'), và kèm theo quote cùng confidence score cho từng trường.\n"
+        "Hãy điền chính xác, không tự bịa dữ liệu."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản chứng nhận xuất xứ sau:\n\n{text}"}
+        ],
+        response_format=COExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_cq_with_ai_text(text: str) -> CQExtracted:
+    """
+    Extracts Certificate of Quality data from DOCX extracted text.
+    """
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách dữ liệu Chứng nhận chất lượng (Certificate of Quality - C/Q) thanh toán quốc tế từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Phân tích nội dung văn bản C/Q được cung cấp và điền vào cấu trúc JSON CQExtracted.\n"
+        "Bóc tách các trường: cq_number, cq_date, quality_statement, issuer_name, goods_description, "
+        "signature_present ('PRESENT' hoặc 'MISSING'), và kèm theo quote cùng confidence score cho từng trường.\n"
+        "Hãy điền chính xác, không tự bịa dữ liệu."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản chứng nhận chất lượng sau:\n\n{text}"}
+        ],
+        response_format=CQExtracted
+    )
+    return response.choices[0].message.parsed
+
+
+async def analyze_lc_with_ai_text(text: str) -> "LCTermsSchema":
+    """
+    Extracts L/C terms from the L/C DOCX text.
+    """
+    from .swift_parser import LCTermsSchema
+    system_prompt = (
+        "Bạn là chuyên gia bóc tách thư tín dụng (Letter of Credit / L/C / MT700) từ văn bản (Agent 1).\n"
+        "Nhiệm vụ: Phân tích nội dung văn bản tài liệu L/C và điền vào cấu trúc JSON LCTermsSchema.\n"
+        "Bóc tách các trường và đánh giá độ tin cậy tương ứng:\n"
+        "max_amount, currency, latest_shipment, beneficiary_name, port_of_loading, applicant_name, expiry_date, "
+        "port_of_discharge, goods_description, incoterms, partial_shipment, transhipment, amount_tolerance.\n"
+        "Hãy điền chính xác, các trường số tiền phải là float, nếu không tìm thấy hãy để mặc định."
+    )
+
+    response = await client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Bóc tách dữ liệu từ văn bản thư tín dụng L/C sau:\n\n{text}"}
         ],
         response_format=LCTermsSchema
     )

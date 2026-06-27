@@ -9,6 +9,9 @@ pydantic==2.7.4
 # PDF processing
 pymupdf==1.24.5
 
+# Word processing
+python-docx==1.1.2
+
 # AI / OpenAI SDK (httpx is required by openai async client)
 openai==1.40.0
 httpx==0.27.2

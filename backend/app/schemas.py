@@ -209,6 +209,95 @@ class PLExtracted(BaseModel):
         return _clamp_confidence(v)
 
 
+
+class COExtracted(BaseModel):
+    co_number: str = ""
+    co_number_quote: str = ""
+    co_number_confidence: float = 0.0
+
+    co_date: str = ""  # Format: YYYY-MM-DD
+    co_date_quote: str = ""
+    co_date_confidence: float = 0.0
+
+    country_of_origin: str = ""
+    country_of_origin_quote: str = ""
+    country_of_origin_confidence: float = 0.0
+
+    invoice_number: str = ""
+    invoice_number_quote: str = ""
+    invoice_number_confidence: float = 0.0
+
+    shipper_name: str = ""
+    shipper_name_quote: str = ""
+    shipper_name_confidence: float = 0.0
+
+    consignee_name: str = ""
+    consignee_name_quote: str = ""
+    consignee_name_confidence: float = 0.0
+
+    goods_description: str = ""
+    goods_description_quote: str = ""
+    goods_description_confidence: float = 0.0
+
+    signature_present: str = ""  # "PRESENT" or "MISSING"
+    signature_present_quote: str = ""
+    signature_present_confidence: float = 0.0
+
+    @field_validator(
+        "co_number_confidence",
+        "co_date_confidence",
+        "country_of_origin_confidence",
+        "invoice_number_confidence",
+        "shipper_name_confidence",
+        "consignee_name_confidence",
+        "goods_description_confidence",
+        "signature_present_confidence",
+        mode="before"
+    )
+    @classmethod
+    def clamp_co_confidence(cls, v: float) -> float:
+        return _clamp_confidence(v)
+
+
+class CQExtracted(BaseModel):
+    cq_number: str = ""
+    cq_number_quote: str = ""
+    cq_number_confidence: float = 0.0
+
+    cq_date: str = ""  # Format: YYYY-MM-DD
+    cq_date_quote: str = ""
+    cq_date_confidence: float = 0.0
+
+    goods_description: str = ""
+    goods_description_quote: str = ""
+    goods_description_confidence: float = 0.0
+
+    invoice_number: str = ""
+    invoice_number_quote: str = ""
+    invoice_number_confidence: float = 0.0
+
+    quality_statement: str = ""  # e.g., "goods comply with the specifications"
+    quality_statement_quote: str = ""
+    quality_statement_confidence: float = 0.0
+
+    signature_present: str = ""  # "PRESENT" or "MISSING"
+    signature_present_quote: str = ""
+    signature_present_confidence: float = 0.0
+
+    @field_validator(
+        "cq_number_confidence",
+        "cq_date_confidence",
+        "goods_description_confidence",
+        "invoice_number_confidence",
+        "quality_statement_confidence",
+        "signature_present_confidence",
+        mode="before"
+    )
+    @classmethod
+    def clamp_cq_confidence(cls, v: float) -> float:
+        return _clamp_confidence(v)
+
+
 class Discrepancy(BaseModel):
     field: str
     actual_value: str
@@ -222,6 +311,8 @@ class CheckLCResponse(BaseModel):
     extracted: ExtractedDocument
     extracted_bl: Optional[BLExtracted] = None
     extracted_pl: Optional[PLExtracted] = None
+    extracted_co: Optional[COExtracted] = None
+    extracted_cq: Optional[CQExtracted] = None
     discrepancies: List[Discrepancy]
     layer1_discrepancies: List[Discrepancy] = []
     cross_discrepancies: List[Discrepancy] = []
@@ -233,4 +324,5 @@ class AuditLogSchema(BaseModel):
     time: str
     message: str
     type: str
+
 

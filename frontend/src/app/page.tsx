@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
+import { ResultsCard } from "./components/ResultsCard";
 import { 
   FileText, 
   Upload, 
@@ -28,7 +29,7 @@ import {
   Terminal
 } from "lucide-react";
 
-interface ExtractedDoc {
+export interface ExtractedDoc {
   invoice_number: string;
   invoice_number_quote: string;
   invoice_number_confidence: number;
@@ -70,7 +71,7 @@ interface ExtractedDoc {
   incoterms_confidence: number;
 }
 
-interface Discrepancy {
+export interface Discrepancy {
   field: string;
   actual_value: string;
   expected_value: string;
@@ -140,13 +141,19 @@ export default function Home() {
   const [result, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Extracted Docs for BL, PL, Cross checking and Tab Selection
+  // Extracted Docs for BL, PL, CO, CQ, Cross checking and Tab Selection
   const [extractedBl, setExtractedBl] = useState<any | null>(null);
   const [extractedPl, setExtractedPl] = useState<any | null>(null);
+  const [extractedCo, setExtractedCo] = useState<any | null>(null);
+  const [extractedCq, setExtractedCq] = useState<any | null>(null);
   const [layer1Discrepancies, setLayer1Discrepancies] = useState<Discrepancy[]>([]);
   const [crossDiscrepancies, setCrossDiscrepancies] = useState<Discrepancy[]>([]);
   const [cannotWaive, setCannotWaive] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<"internal" | "cross" | "lc">("internal");
+
+  // HITL stages
+  const [resultStep, setResultStep] = useState<"ocr_check" | "compliance_check">("ocr_check");
+  const [activeOcrTab, setActiveOcrTab] = useState<"invoice" | "bl" | "pl" | "co" | "cq">("invoice");
 
   // Live Terminal Logs from Backend Streaming
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
@@ -155,6 +162,7 @@ export default function Home() {
   // Editable state (HITL)
   const [extractedDoc, setExtractedDoc] = useState<ExtractedDoc | null>(null);
   const [discrepancyList, setDiscrepancyList] = useState<Discrepancy[]>([]);
+  const [editingDoc, setEditingDoc] = useState<"invoice" | "bl" | "pl" | "co" | "cq" | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -517,7 +525,7 @@ export default function Home() {
     setLcFile(file);
     setIsLCParsing(true);
     setError(null);
-    addAuditLog(`Bắt đầu bóc tách điều khoản từ file L/C PDF: ${file.name}...`, "info");
+    addAuditLog(`Bắt đầu bóc tách điều khoản từ file L/C: ${file.name}...`, "info");
     
     const formData = new FormData();
     formData.append("file", file);
@@ -552,13 +560,13 @@ export default function Home() {
         });
         setLcConfidences(confs);
         
-        addAuditLog(`Bóc tách L/C PDF thành công. Chuyển sang Safety Gate để xác nhận điều khoản.`, "success");
+        addAuditLog(`Bóc tách L/C thành công. Chuyển sang Safety Gate để xác nhận điều khoản.`, "success");
         setScreen("safety_gate");
       }
     } catch (err: any) {
       console.error(err);
-      setError("Không thể bóc tách file L/C PDF. Vui lòng dán bức điện SWIFT thô hoặc điền tay.");
-      addAuditLog("Bóc tách L/C PDF thất bại.", "warning");
+      setError("Không thể bóc tách file L/C. Vui lòng dán bức điện SWIFT thô hoặc điền tay.");
+      addAuditLog("Bóc tách L/C thất bại.", "warning");
     } finally {
       setIsLCParsing(false);
     }
@@ -578,14 +586,17 @@ export default function Home() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { "application/pdf": [".pdf"] },
+    accept: { 
+      "application/pdf": [".pdf"],
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"]
+    },
     multiple: true
   });
 
   // Submit check request to FastAPI using Streaming Fetch Reader
   const handleCheck = async () => {
     if (files.length === 0) {
-      setError("Vui lòng tải lên ít nhất một file PDF chứng từ cần đối chiếu.");
+      setError("Vui lòng tải lên ít nhất một tệp PDF hoặc DOCX chứng từ cần đối chiếu.");
       return;
     }
 
@@ -595,6 +606,9 @@ export default function Home() {
     setExtractedDoc(null);
     setExtractedBl(null);
     setExtractedPl(null);
+    setExtractedCo(null);
+    setExtractedCq(null);
+    setResultStep("ocr_check");
     setDiscrepancyList([]);
     setCrossDiscrepancies([]);
     setTerminalLogs([]);
@@ -656,10 +670,25 @@ export default function Home() {
               setExtractedDoc(resData.extracted);
               setExtractedBl(resData.extracted_bl);
               setExtractedPl(resData.extracted_pl);
+              setExtractedCo(resData.extracted_co);
+              setExtractedCq(resData.extracted_cq);
               setDiscrepancyList(resData.discrepancies || []);
               setLayer1Discrepancies(resData.layer1_discrepancies || []);
               setCrossDiscrepancies(resData.cross_discrepancies || []);
               setCannotWaive(resData.cannot_waive || false);
+
+              // Set default active tab
+              if (resData.extracted && resData.extracted.invoice_number) {
+                setActiveOcrTab("invoice");
+              } else if (resData.extracted_bl) {
+                setActiveOcrTab("bl");
+              } else if (resData.extracted_pl) {
+                setActiveOcrTab("pl");
+              } else if (resData.extracted_co) {
+                setActiveOcrTab("co");
+              } else if (resData.extracted_cq) {
+                setActiveOcrTab("cq");
+              }
               addTerminalLog("AI Engine đã bóc tách dữ liệu và hoàn tất kiểm toán chéo.");
               addTerminalLog("Đối chiếu UCP 600 thành công.");
             }
@@ -712,45 +741,127 @@ export default function Home() {
     }, 1000);
   };
 
-  // Start editing a field (HITL)
-  const startEditing = (field: keyof ExtractedDoc) => {
-    if (!extractedDoc) return;
-    setEditingField(field);
-    setEditValue(extractedDoc[field].toString());
+  const [isRerunningValidation, setIsRerunningValidation] = useState(false);
+
+  const handleRerunValidation = async () => {
+    setIsRerunningValidation(true);
+    addAuditLog("Bắt đầu đối chiếu dữ liệu L/C dựa trên thông tin OCR đã xác nhận...", "info");
+    try {
+      const payload = {
+        lc_rules: lcTerms,
+        extracted: extractedDoc,
+        extracted_bl: extractedBl,
+        extracted_pl: extractedPl,
+        extracted_co: extractedCo,
+        extracted_cq: extractedCq
+      };
+      
+      const response = await axios.post("http://localhost:8000/api/v1/validate-documents", payload);
+      if (response.data.status === "success") {
+        setDiscrepancyList(response.data.discrepancies || []);
+        setLayer1Discrepancies(response.data.layer1_discrepancies || []);
+        setCrossDiscrepancies(response.data.cross_discrepancies || []);
+        setCannotWaive(response.data.cannot_waive || false);
+        if (result) {
+          setResult({
+            ...result,
+            waiver_draft: response.data.waiver_draft
+          });
+        }
+        
+        const totalErrors = (response.data.layer1_discrepancies?.length || 0) + 
+                            (response.data.discrepancies?.length || 0) + 
+                            (response.data.cross_discrepancies?.length || 0);
+        if (totalErrors > 0) {
+          addAuditLog(`Đối chiếu hoàn tất: Phát hiện ${totalErrors} bất hợp lệ (HITL 2).`, "warning");
+        } else {
+          addAuditLog("Đối chiếu hoàn tất: Các chứng từ hợp lệ toàn phần với điều khoản L/C! (HITL 2)", "success");
+        }
+
+        setResultStep("compliance_check");
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Không thể chạy đối chiếu chéo. Vui lòng kiểm tra kết nối API.");
+      addAuditLog("Lỗi chạy đối chiếu chéo.", "warning");
+    } finally {
+      setIsRerunningValidation(false);
+    }
   };
 
-  // Save edited value (HITL)
-  const saveEdit = (field: keyof ExtractedDoc) => {
-    if (!extractedDoc) return;
+  const startEditingField = (doc: "invoice" | "bl" | "pl" | "co" | "cq", field: string) => {
+    setEditingDoc(doc);
+    setEditingField(field);
+    
+    let currentVal = "";
+    if (doc === "invoice" && extractedDoc) currentVal = (extractedDoc as any)[field]?.toString() || "";
+    else if (doc === "bl" && extractedBl) currentVal = extractedBl[field]?.toString() || "";
+    else if (doc === "pl" && extractedPl) currentVal = extractedPl[field]?.toString() || "";
+    else if (doc === "co" && extractedCo) currentVal = extractedCo[field]?.toString() || "";
+    else if (doc === "cq" && extractedCq) currentVal = extractedCq[field]?.toString() || "";
+    
+    setEditValue(currentVal);
+  };
+
+  const saveEditingField = () => {
+    if (!editingDoc || !editingField) return;
     
     let updatedVal: any = editValue;
-    if (field === "total_amount") {
-      updatedVal = parseFloat(editValue) || 0.0;
+    
+    if (editingDoc === "invoice" && extractedDoc) {
+      if (editingField === "total_amount" || editingField === "quantity" || editingField === "unit_price") {
+        updatedVal = parseFloat(editValue) || 0;
+      }
+      const updated = {
+        ...extractedDoc,
+        [editingField]: updatedVal,
+        [`${editingField}_confidence`]: 1.0
+      };
+      setExtractedDoc(updated);
+      addAuditLog(`Chuyên viên hiệu chỉnh Hóa đơn: ${editingField} -> '${updatedVal}'`, "edit");
+    } 
+    else if (editingDoc === "bl" && extractedBl) {
+      const updated = {
+        ...extractedBl,
+        [editingField]: updatedVal,
+        [`${editingField}_confidence`]: 1.0
+      };
+      setExtractedBl(updated);
+      addAuditLog(`Chuyên viên hiệu chỉnh B/L: ${editingField} -> '${updatedVal}'`, "edit");
     }
-
-    // When edited by human, set confidence to 1.0 (since verified by human)
-    const updatedDoc = {
-      ...extractedDoc,
-      [field]: updatedVal,
-      [`${field}_confidence` as keyof ExtractedDoc]: 1.0
-    };
-
-    const labels: Record<string, string> = {
-      beneficiary_name: "Người thụ hưởng",
-      applicant_name: "Người mua (Applicant)",
-      total_amount: "Tổng số tiền",
-      currency: "Đồng tiền",
-      shipment_date: "Ngày giao hàng",
-      port_of_loading: "Cảng bốc hàng",
-      port_of_discharge: "Cảng dỡ hàng",
-      incoterms: "Incoterms",
-      goods_description: "Mô tả hàng hóa"
-    };
-
-    setExtractedDoc(updatedDoc);
+    else if (editingDoc === "pl" && extractedPl) {
+      if (editingField === "quantity" || editingField === "packages_count") {
+        updatedVal = parseFloat(editValue) || 0;
+      }
+      const updated = {
+        ...extractedPl,
+        [editingField]: updatedVal,
+        [`${editingField}_confidence`]: 1.0
+      };
+      setExtractedPl(updated);
+      addAuditLog(`Chuyên viên hiệu chỉnh Packing List: ${editingField} -> '${updatedVal}'`, "edit");
+    }
+    else if (editingDoc === "co" && extractedCo) {
+      const updated = {
+        ...extractedCo,
+        [editingField]: updatedVal,
+        [`${editingField}_confidence`]: 1.0
+      };
+      setExtractedCo(updated);
+      addAuditLog(`Chuyên viên hiệu chỉnh C/O: ${editingField} -> '${updatedVal}'`, "edit");
+    }
+    else if (editingDoc === "cq" && extractedCq) {
+      const updated = {
+        ...extractedCq,
+        [editingField]: updatedVal,
+        [`${editingField}_confidence`]: 1.0
+      };
+      setExtractedCq(updated);
+      addAuditLog(`Chuyên viên hiệu chỉnh C/Q: ${editingField} -> '${updatedVal}'`, "edit");
+    }
+    
+    setEditingDoc(null);
     setEditingField(null);
-    recalculateDiscrepancies(updatedDoc);
-    addAuditLog(`Chuyên viên điều chỉnh thủ công trường '${labels[field]}' thành: '${updatedVal}' (HITL)`, "edit");
   };
 
   // Copy waiver draft email to clipboard
@@ -1118,11 +1229,11 @@ export default function Home() {
               ) : (
                 <div className="space-y-4 flex-1 flex flex-col justify-between">
                   <div>
-                    <label className="text-xs text-slate-500 font-bold mb-2 block">Chọn file PDF của Thư tín dụng (L/C):</label>
+                    <label className="text-xs text-slate-500 font-bold mb-2 block">Chọn file PDF/DOCX của Thư tín dụng (L/C):</label>
                     <div className="border-2 border-dashed border-slate-200 hover:border-slate-300 rounded-xl p-8 bg-slate-50/20 text-center cursor-pointer transition-all">
                       <input
                         type="file"
-                        accept="application/pdf"
+                        accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) handleLcFileUpload(file);
@@ -1134,7 +1245,7 @@ export default function Home() {
                         <div className="h-12 w-12 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-3 text-blue-600">
                           <Upload className="h-5 w-5" />
                         </div>
-                        <p className="text-sm font-bold text-slate-700">Tải lên L/C dạng PDF</p>
+                        <p className="text-sm font-bold text-slate-700">Tải lên L/C dạng PDF hoặc DOCX</p>
                         {lcFile && <p className="text-xs text-emerald-600 font-bold mt-1">Đã chọn: {lcFile.name}</p>}
                         <p className="text-xs text-slate-400 mt-1">Hệ thống sẽ tự nhận diện và bóc tách các điều khoản</p>
                       </label>
@@ -1201,7 +1312,7 @@ export default function Home() {
                         <Upload className="h-6 w-6" />
                       </div>
                       <p className="text-sm font-bold text-slate-700">
-                        Kéo & thả các file PDF chứng từ vào đây
+                        Kéo & thả các file PDF hoặc DOCX chứng từ vào đây
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
                         (Commercial Invoice, Bill of Lading, Packing List)
@@ -1222,7 +1333,7 @@ export default function Home() {
                 <button
                   onClick={() => {
                     if (files.length === 0) {
-                      setError("Vui lòng tải lên ít nhất một file PDF chứng từ cần đối chiếu.");
+                      setError("Vui lòng tải lên ít nhất một tệp PDF hoặc DOCX chứng từ cần đối chiếu.");
                       return;
                     }
                     setScreen("safety_gate");
@@ -1534,7 +1645,7 @@ export default function Home() {
               <Loader2 className="h-10 w-10 text-blue-700 animate-spin mb-6" />
               <h3 className="text-lg font-bold text-blue-900 mb-2">Đang phân tích bộ chứng từ</h3>
               <p className="text-sm text-slate-500 max-w-sm mb-6">
-                Các Agent AI đang bóc tách hình ảnh PDF gốc bằng GPT-4o Vision và thực hiện rà soát, kiểm toán độc lập.
+                Các Agent AI đang bóc tách nội dung PDF/DOCX bằng GPT-4o và thực hiện rà soát, kiểm toán độc lập.
               </p>
               
               <div className="w-64 bg-slate-100 rounded-full h-2 border border-slate-200 overflow-hidden relative">
@@ -1548,367 +1659,39 @@ export default function Home() {
 
           {/* Results Render */}
           {!isLoading && extractedDoc && (
-            <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md flex flex-col justify-between min-h-[560px]">
-              <div>
-                <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-blue-900">Báo cáo thẩm định (Compliance Report)</h2>
-                    <p className="text-xs text-slate-400">Số hóa đơn: <span className="font-mono text-blue-700 font-bold">{extractedDoc.invoice_number || "N/A"}</span></p>
-                  </div>
-                  <div className={`px-3.5 py-1.5 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
-                    (discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length) > 0
-                      ? "bg-rose-50 border-rose-100 text-rose-700"
-                      : "bg-emerald-50 border-emerald-100 text-emerald-700"
-                  }`}>
-                    {(discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length) > 0 ? (
-                      <>
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        <span>Phát hiện {discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length} sai biệt</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle className="h-3.5 w-3.5" />
-                        <span>Chứng từ tuân thủ tuyệt đối</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Tab Switcher (BA v2.0 TO-BE) */}
-                <div className="flex border-b border-slate-100 mb-5">
-                  <button
-                    onClick={() => setActiveTab("internal")}
-                    className={`pb-3 text-xs font-bold transition-all px-4 relative ${
-                      activeTab === "internal" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Kiểm tra nội bộ (Layer 1)
-                    {layer1Discrepancies.length > 0 && (
-                      <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
-                        {layer1Discrepancies.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setActiveTab("cross")}
-                    className={`pb-3 text-xs font-bold transition-all px-4 relative ${
-                      activeTab === "cross" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Kiểm tra chéo chứng từ (Layer 2)
-                    {crossDiscrepancies.length > 0 && (
-                      <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
-                        {crossDiscrepancies.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setActiveTab("lc")}
-                    className={`pb-3 text-xs font-bold transition-all px-4 relative ${
-                      activeTab === "lc" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Đối chiếu L/C (Layer 3)
-                    {discrepancyList.length > 0 && (
-                      <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
-                        {discrepancyList.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
-
-                {activeTab === "lc" ? (
-                  <>
-                    <div className="mb-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-start gap-2.5">
-                      <HelpCircle className="h-4.5 w-4.5 text-blue-700 shrink-0 mt-0.5" />
-                      <span>
-                        <strong>Human-in-the-Loop (HITL):</strong> Chuyên viên có thể sửa đổi dữ liệu sai lệch bằng nút bút chì ở cột <strong>Chứng từ thực tế (AI)</strong>. Hệ thống sẽ so khớp lại ngay tức thì.
-                      </span>
-                    </div>
-
-                    {/* Diff table */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full border-collapse text-left">
-                        <thead>
-                          <tr className="border-b border-slate-100 text-xs text-slate-500 uppercase tracking-wider">
-                            <th className="pb-3 font-bold">Trường dữ liệu</th>
-                            <th className="pb-3 font-bold">Yêu cầu L/C</th>
-                            <th className="pb-3 font-bold">Chứng từ thực tế (AI)</th>
-                            <th className="pb-3 font-bold text-center">Trạng thái</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-sm">
-                          {["beneficiary_name", "applicant_name", "total_amount", "currency", "shipment_date", "port_of_loading", "port_of_discharge", "incoterms", "goods_description"].map(field => {
-                            const status = getFieldStatus(field);
-                            if (!status) return null;
-
-                            const labels: Record<string, string> = {
-                              beneficiary_name: "Người thụ hưởng",
-                              applicant_name: "Người mua (Applicant)",
-                              total_amount: "Tổng số tiền",
-                              currency: "Đồng tiền",
-                              shipment_date: "Ngày giao hàng",
-                              port_of_loading: "Cảng bốc hàng",
-                              port_of_discharge: "Cảng dỡ hàng",
-                              incoterms: "Incoterms",
-                              goods_description: "Mô tả hàng hóa"
-                            };
-
-                            const isEditing = editingField === field;
-                            const isLowConfidence = status.confidence < 0.8;
-
-                            return (
-                              <React.Fragment key={field}>
-                                <tr className={`transition-colors ${status.isValid ? "bg-emerald-50/20 hover:bg-emerald-50/40" : "bg-rose-50/30 hover:bg-rose-50/50"}`}>
-                                  <td className="py-4 font-bold text-slate-700">
-                                    {labels[field]}
-                                  </td>
-                                  <td className="py-4 text-slate-500 font-mono text-xs">
-                                    {status.expected}
-                                  </td>
-                                  <td className="py-2.5">
-                                    {isEditing ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <input
-                                          type={field === "total_amount" ? "number" : "text"}
-                                          value={editValue}
-                                          onChange={(e) => setEditValue(e.target.value)}
-                                          className="bg-white border border-blue-500 rounded px-2 py-1 text-xs text-slate-800 focus:outline-none w-36 font-mono"
-                                          autoFocus
-                                        />
-                                        <button 
-                                          onClick={() => saveEdit(field as keyof ExtractedDoc)}
-                                          className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-500"
-                                        >
-                                          <Check className="h-3 w-3" />
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div className="flex flex-col gap-1">
-                                        <div className="flex items-center gap-2 group">
-                                          <span className={`font-mono text-xs font-semibold ${status.isValid ? "text-slate-800" : "text-rose-700"}`}>
-                                            {status.actual}
-                                          </span>
-                                          
-                                          {/* Confidence score badge */}
-                                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
-                                            isLowConfidence 
-                                              ? "bg-amber-100 text-amber-800 border border-amber-200 animate-pulse" 
-                                              : "bg-blue-50 text-blue-700"
-                                          }`}>
-                                            Tin cậy: {Math.round(status.confidence * 100)}%
-                                          </span>
-
-                                          {isLowConfidence && (
-                                            <div className="flex items-center gap-1 text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                                              <AlertTriangle className="h-3 w-3 text-amber-600" />
-                                              <span>Kiểm tra lại</span>
-                                            </div>
-                                          )}
-
-                                          <button 
-                                            onClick={() => startEditing(field as keyof ExtractedDoc)}
-                                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-blue-700"
-                                            title="Click để sửa lỗi thủ công"
-                                          >
-                                            <Edit2 className="h-3.5 w-3.5" />
-                                          </button>
-                                        </div>
-                                        {/* Raw quotes */}
-                                        {status.quote && (
-                                          <div className="text-[10px] text-slate-500 italic max-w-xs break-all bg-slate-50 p-1.5 rounded border border-slate-200/60 leading-normal">
-                                            Trích dẫn gốc: "{status.quote}"
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="py-4 text-center">
-                                    {status.isValid ? (
-                                      <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
-                                        <CheckCircle className="h-4 w-4" />
-                                      </span>
-                                    ) : (
-                                      <span className={`inline-flex items-center justify-center h-6 w-6 rounded-full ${
-                                        status.severity === "Warning" 
-                                          ? "bg-amber-100 text-amber-700 border border-amber-200" 
-                                          : "bg-rose-100 text-rose-700 border border-rose-200"
-                                      }`}>
-                                        {status.severity === "Warning" ? (
-                                          <AlertTriangle className="h-4 w-4" />
-                                        ) : (
-                                          <XCircle className="h-4 w-4" />
-                                        )}
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                                {!status.isValid && (
-                                  <tr className="bg-rose-50/10">
-                                    <td colSpan={4} className="py-2.5 px-4 text-xs text-rose-700 font-semibold italic border-l-2 border-rose-500">
-                                      {status.reason}
-                                    </td>
-                                  </tr>
-                                )}
-                              </React.Fragment>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : activeTab === "cross" ? (
-                  <div className="space-y-4">
-                    {crossDiscrepancies.length === 0 ? (
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 text-center flex flex-col items-center justify-center">
-                        <CheckCircle className="h-10 w-10 text-emerald-600 mb-3" />
-                        <h4 className="text-sm font-bold text-emerald-900">Nhất quán toàn bộ dữ liệu</h4>
-                        <p className="text-xs text-emerald-700 mt-1 max-w-sm">
-                          Không phát hiện sai biệt chéo (Layer 2) giữa Hóa đơn thương mại, Vận đơn (B/L) và Phiếu đóng gói (Packing List).
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {crossDiscrepancies.map((disc, idx) => (
-                          <div key={idx} className="bg-rose-50/20 border border-rose-100/60 p-4 rounded-xl flex flex-col gap-2 animate-[fadeIn_0.3s_ease-out]">
-                            <div className="flex justify-between items-center">
-                              <span className="text-xs font-bold text-rose-800 uppercase tracking-wider">
-                                {disc.field === "cross_beneficiary_shipper" ? "Beneficiary ↔ Shipper" :
-                                 disc.field === "cross_goods_invoice_bl" ? "Mô tả hàng (Invoice ↔ B/L)" :
-                                 disc.field === "cross_goods_invoice_pl" ? "Mô tả hàng (Invoice ↔ PL)" :
-                                 disc.field === "cross_loading_port" ? "Cảng bốc hàng" :
-                                 disc.field === "cross_discharge_port" ? "Cảng dỡ hàng" : "Sai biệt"}
-                              </span>
-                              <span className="bg-rose-100 text-rose-700 text-[9px] px-2 py-0.5 rounded font-bold uppercase">
-                                {disc.severity}
-                              </span>
-                            </div>
-                            <p className="text-xs text-rose-950 font-semibold">{disc.reason}</p>
-                            <div className="grid grid-cols-2 gap-4 mt-1 bg-white p-3 rounded-lg border border-slate-100 text-xs font-mono">
-                              <div>
-                                <div className="text-slate-400 text-[8px] uppercase font-bold">Giá trị thực tế</div>
-                                <div className="text-rose-700 font-bold mt-0.5 break-all">{disc.actual_value}</div>
-                              </div>
-                              <div>
-                                <div className="text-slate-400 text-[8px] uppercase font-bold">Giá trị đối chiếu</div>
-                                <div className="text-slate-700 font-bold mt-0.5 break-all">{disc.expected_value}</div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {layer1Discrepancies.length === 0 ? (
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 text-center flex flex-col items-center justify-center">
-                        <CheckCircle className="h-10 w-10 text-emerald-600 mb-3" />
-                        <h4 className="text-sm font-bold text-emerald-900">Chứng từ hoàn toàn hợp lệ nội bộ</h4>
-                        <p className="text-xs text-emerald-700 mt-1 max-w-sm">
-                          Hóa đơn thương mại, Vận đơn và Phiếu đóng gói đáp ứng đầy đủ các kiểm tra cấu trúc nội bộ (Layer 1).
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {layer1Discrepancies.map((disc, idx) => (
-                          <div key={idx} className={`border p-4 rounded-xl flex flex-col gap-2 animate-[fadeIn_0.3s_ease-out] ${
-                            disc.severity === "Warning" ? "bg-amber-50/20 border-amber-100/60" : "bg-rose-50/20 border-rose-100/60"
-                          }`}>
-                            <div className="flex justify-between items-center">
-                              <span className={`text-xs font-bold uppercase tracking-wider ${
-                                disc.severity === "Warning" ? "text-amber-800" : "text-rose-800"
-                              }`}>
-                                {disc.field}
-                              </span>
-                              <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase ${
-                                disc.severity === "Warning" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"
-                              }`}>
-                                {disc.severity}
-                              </span>
-                            </div>
-                            <p className={`text-xs font-semibold ${
-                              disc.severity === "Warning" ? "text-amber-950" : "text-rose-950"
-                            }`}>{disc.reason}</p>
-                            <div className="grid grid-cols-2 gap-4 mt-1 bg-white p-3 rounded-lg border border-slate-100 text-xs font-mono">
-                              <div>
-                                <div className="text-slate-400 text-[8px] uppercase font-bold">Thực tế bóc tách</div>
-                                <div className={`font-bold mt-0.5 break-all ${
-                                  disc.severity === "Warning" ? "text-amber-700" : "text-rose-700"
-                                }`}>{disc.actual_value}</div>
-                              </div>
-                              <div>
-                                <div className="text-slate-400 text-[8px] uppercase font-bold">Tiêu chuẩn nghiệp vụ</div>
-                                <div className="text-slate-700 font-bold mt-0.5 break-all">{disc.expected_value}</div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Expiry Absolute Block Message */}
-              {cannotWaive && (
-                <div className="mt-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex gap-3 items-start animate-[fadeIn_0.4s_ease-out]">
-                  <XCircle className="h-6 w-6 text-rose-600 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="font-extrabold text-sm uppercase">L/C QUÁ HẠN XUẤT TRÌNH - TỪ CHỐI THANH TOÁN TUYỆT ĐỐI</h4>
-                    <p className="mt-1 leading-normal">
-                      Hồ sơ bị từ chối tuyệt đối do ngày xuất trình chứng từ vượt quá ngày hết hạn hiệu lực của L/C. 
-                      Theo các nguyên tắc UCP 600, lỗi này thuộc nhóm bất hợp lệ tuyệt đối, <strong>không thể áp dụng cơ chế xin Waiver (bỏ qua lỗi) từ khách hàng</strong>. 
-                      Hành động tạo Waiver Letter đã bị hệ thống khóa.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Action Decision buttons (BA v2.0 TO-BE) */}
-              <div className="border-t border-slate-100 pt-4 mt-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
-                <div className="text-xs text-slate-500 text-center sm:text-left font-medium">
-                  Báo cáo được lập tự động bởi AI và được kiểm duyệt chéo theo chuẩn L/C UCP 600.
-                </div>
-                <div className="flex gap-2 w-full sm:w-auto">
-                  {(discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length) === 0 ? (
-                    <button
-                      onClick={() => {
-                        setDecisionStatus("payout");
-                        addAuditLog("Chuyên viên xác nhận COMPLIANT. Hồ sơ đủ điều kiện giải ngân.", "success");
-                      }}
-                      className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-                    >
-                      <CheckCircle className="h-4 w-4" />
-                      <span>Xác nhận & Giải ngân</span>
-                    </button>
-                  ) : (
-                    <>
-                      {!cannotWaive && (
-                        <button
-                          onClick={() => {
-                            setDecisionStatus("pending_customer");
-                            addAuditLog("Chuyên viên gửi đề xuất Waiver đến Applicant. Trạng thái: Pending Customer Decision", "info");
-                          }}
-                          className="w-full sm:w-auto px-5 py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-                        >
-                          <Mail className="h-4 w-4" />
-                          <span>Gửi Đề Xuất Waiver</span>
-                        </button>
-                      )}
-                      <button
-                        onClick={() => setIsRejectModalOpen(true)}
-                        className="w-full sm:w-auto px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-                      >
-                        <XCircle className="h-4 w-4" />
-                        <span>Từ chối thanh toán</span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-            </div>
+            <ResultsCard
+              isLoading={isLoading}
+              extractedDoc={extractedDoc}
+              extractedBl={extractedBl}
+              extractedPl={extractedPl}
+              extractedCo={extractedCo}
+              extractedCq={extractedCq}
+              resultStep={resultStep}
+              setResultStep={setResultStep}
+              activeOcrTab={activeOcrTab}
+              setActiveOcrTab={setActiveOcrTab}
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              discrepancyList={discrepancyList}
+              layer1Discrepancies={layer1Discrepancies}
+              crossDiscrepancies={crossDiscrepancies}
+              cannotWaive={cannotWaive}
+              editingDoc={editingDoc}
+              editingField={editingField}
+              editValue={editValue}
+              setEditValue={setEditValue}
+              startEditingField={startEditingField}
+              saveEditingField={saveEditingField}
+              handleRerunValidation={handleRerunValidation}
+              isRerunningValidation={isRerunningValidation}
+              decisionStatus={decisionStatus}
+              setDecisionStatus={setDecisionStatus}
+              setIsRejectModalOpen={setIsRejectModalOpen}
+              addAuditLog={addAuditLog}
+              getFieldStatus={getFieldStatus}
+              result={result}
+              setResult={setResult}
+            />
           )}
 
         </section>

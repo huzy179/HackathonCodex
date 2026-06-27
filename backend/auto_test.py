@@ -338,6 +338,159 @@ class TestLCVisionPipeline(unittest.TestCase):
         self.assertIsNotNone(result_payload["waiver_draft"])
         self.assertTrue(len(result_payload["waiver_draft"]) > 100)
 
+    def test_validate_documents_endpoint(self):
+        """
+        Tests the /api/v1/validate-documents endpoint with valid and invalid payloads.
+        """
+        # 1. Valid case
+        payload_valid = {
+            "lc_rules": TEST_LC_TERMS,
+            "extracted": {
+                **MOCK_INVOICE_VALID.model_dump(),
+                "invoice_date": "2026-06-25",
+                "invoice_date_confidence": 1.0,
+                "beneficiary_address": "123 Street",
+                "beneficiary_address_confidence": 1.0,
+                "applicant_address": "456 Avenue",
+                "applicant_address_confidence": 1.0,
+                "quantity": 1000.0,
+                "quantity_confidence": 1.0,
+                "unit_price": 48.5,
+                "unit_price_confidence": 1.0,
+                "signature_present": "PRESENT",
+                "signature_present_confidence": 1.0
+            },
+            "extracted_bl": {
+                **MOCK_BL_VALID.model_dump(),
+                "notify_party": "SAME AS CONSIGNEE",
+                "notify_party_confidence": 1.0,
+                "clean_on_board_clause": "Clean on Board",
+                "clean_on_board_clause_confidence": 1.0,
+                "original_copies_count": "3 originals",
+                "original_copies_count_confidence": 1.0,
+                "bl_date": "2026-06-25",
+                "bl_date_confidence": 1.0,
+                "vessel_name_voyage": "OCEAN STAR V100",
+                "vessel_name_voyage_confidence": 1.0,
+                "signature_present": "PRESENT",
+                "signature_present_confidence": 1.0,
+                "quantity": "50000 KGS and 1000 PACKAGES",
+                "quantity_confidence": 1.0
+            },
+            "extracted_pl": {
+                **MOCK_PL_VALID.model_dump(),
+                "net_weight": "49000 KGS",
+                "net_weight_confidence": 1.0,
+                "packages_count": 1000,
+                "packages_count_confidence": 1.0
+            },
+            "extracted_co": {
+                "co_number": "CO-2026-999",
+                "co_date": "2026-06-25",
+                "country_of_origin": "VIETNAM",
+                "invoice_number": "INV-2026-001",
+                "shipper_name": "GLOBAL TRADING CORP",
+                "consignee_name": "IMPORT CO LTD",
+                "goods_description": "AGRICULTURAL PRODUCTS",
+                "signature_present": "PRESENT"
+            },
+            "extracted_cq": {
+                "cq_number": "CQ-2026-111",
+                "cq_date": "2026-06-26",
+                "invoice_number": "INV-2026-001",
+                "goods_description": "AGRICULTURAL PRODUCTS",
+                "quality_statement": "COMPLIES WITH QUALITY STANDARDS",
+                "signature_present": "PRESENT"
+            }
+        }
+        response = self.client.post("/api/v1/validate-documents", json=payload_valid)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(len(data["discrepancies"]), 0)
+        self.assertEqual(len(data["layer1_discrepancies"]), 0)
+        self.assertEqual(len(data["cross_discrepancies"]), 0)
+
+        # 2. Invalid case (fails Layer 1 checks for C/O and C/Q, fails Cross checks)
+        payload_invalid = {
+            "lc_rules": TEST_LC_TERMS,
+            "extracted": {
+                **MOCK_INVOICE_VALID.model_dump(),
+                "invoice_date": "2026-06-25",
+                "invoice_date_confidence": 1.0,
+                "beneficiary_address": "123 Street",
+                "beneficiary_address_confidence": 1.0,
+                "applicant_address": "456 Avenue",
+                "applicant_address_confidence": 1.0,
+                "quantity": 1000.0,
+                "quantity_confidence": 1.0,
+                "unit_price": 48.5,
+                "unit_price_confidence": 1.0,
+                "signature_present": "PRESENT",
+                "signature_present_confidence": 1.0
+            },
+            "extracted_bl": {
+                **MOCK_BL_VALID.model_dump(),
+                "notify_party": "SAME AS CONSIGNEE",
+                "notify_party_confidence": 1.0,
+                "clean_on_board_clause": "Clean on Board",
+                "clean_on_board_clause_confidence": 1.0,
+                "original_copies_count": "3 originals",
+                "original_copies_count_confidence": 1.0,
+                "bl_date": "2026-06-25",
+                "bl_date_confidence": 1.0,
+                "vessel_name_voyage": "OCEAN STAR V100",
+                "vessel_name_voyage_confidence": 1.0,
+                "signature_present": "PRESENT",
+                "signature_present_confidence": 1.0,
+                "quantity": "50000 KGS and 1000 PACKAGES",
+                "quantity_confidence": 1.0
+            },
+            "extracted_pl": {
+                **MOCK_PL_VALID.model_dump(),
+                "net_weight": "49000 KGS",
+                "net_weight_confidence": 1.0,
+                "packages_count": 1000,
+                "packages_count_confidence": 1.0
+            },
+            "extracted_co": {
+                "co_number": "",  # Empty number -> Layer 1 Warning
+                "co_date": "invalid-date",  # Invalid date format -> Layer 1 Warning
+                "country_of_origin": "VIETNAM",
+                "invoice_number": "INV-2026-DIFFERENT",  # Doesn't match invoice number -> Layer 2 Cross Error
+                "shipper_name": "FAKE SUPPLIER CORP",  # Doesn't match beneficiary -> Layer 2 Cross Error
+                "consignee_name": "IMPORT CO LTD",
+                "goods_description": "AGRICULTURAL PRODUCTS",
+                "signature_present": "MISSING"  # Missing signature -> Layer 1 Warning
+            },
+            "extracted_cq": {
+                "cq_number": "CQ-999",
+                "cq_date": "2026-06-26",
+                "invoice_number": "INV-2026-001",
+                "goods_description": "ELECTRONIC COMPONENTS",  # Cross goods description discrepancy -> Layer 2 Cross Error
+                "quality_statement": "",  # Missing quality statement -> Layer 1 Warning
+                "signature_present": "MISSING"  # Missing signature -> Layer 1 Warning
+            }
+        }
+        response = self.client.post("/api/v1/validate-documents", json=payload_invalid)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        
+        # Check Layer 1 discrepancies
+        l1_fields = [d["field"] for d in data["layer1_discrepancies"]]
+        self.assertIn("co_number", l1_fields)
+        self.assertIn("co_date", l1_fields)
+        self.assertIn("co_signature", l1_fields)
+        self.assertIn("cq_statement", l1_fields)
+        self.assertIn("cq_signature", l1_fields)
+
+        # Check Cross-document (Layer 2) discrepancies
+        cross_fields = [d["field"] for d in data["cross_discrepancies"]]
+        self.assertIn("cross_co_invoice_number", cross_fields)
+        self.assertIn("cross_co_shipper_beneficiary", cross_fields)
+        self.assertIn("cross_cq_goods_invoice", cross_fields)
+
 def run_tests():
     print("[*] Starting Offline Mock Unit & Integration Tests...")
     suite = unittest.TestLoader().loadTestsFromTestCase(TestLCVisionPipeline)

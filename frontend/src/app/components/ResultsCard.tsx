@@ -1,5 +1,5 @@
-import React from "react";
-import { AlertTriangle, CheckCircle, Check, Edit2, Loader2, Mail, XCircle, HelpCircle } from "lucide-react";
+import React, { useState } from "react";
+import { AlertTriangle, CheckCircle, Check, Edit2, Loader2, Mail, XCircle, HelpCircle, Copy } from "lucide-react";
 import { ExtractedDoc, Discrepancy } from "../page";
 
 interface ResultsCardProps {
@@ -37,7 +37,19 @@ interface ResultsCardProps {
   setResult: (res: any) => void;
 }
 
-export const ResultsCard: React.FC<ResultsCardProps> = ({
+export const ResultsCard: React.FC<ResultsCardProps> = (props) => {
+  const [emailCopied, setEmailCopied] = useState(false);
+  const handleCopyEmail = () => {
+    if (props.result?.waiver_draft) {
+      navigator.clipboard.writeText(props.result.waiver_draft);
+      setEmailCopied(true);
+      setTimeout(() => setEmailCopied(false), 2000);
+    }
+  };
+  return <ResultsCardInner {...props} emailCopied={emailCopied} handleCopyEmail={handleCopyEmail} />;
+};
+
+const ResultsCardInner: React.FC<ResultsCardProps & { emailCopied: boolean; handleCopyEmail: () => void }> = ({
   extractedDoc,
   extractedBl,
   extractedPl,
@@ -66,7 +78,9 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
   addAuditLog,
   getFieldStatus,
   result,
-  setResult
+  setResult,
+  emailCopied,
+  handleCopyEmail
 }) => {
 
   const renderOcrRow = (docType: "invoice" | "bl" | "pl" | "co" | "cq" | "insurance", label: string, fieldKey: string, type: string, options?: string[]) => {
@@ -332,16 +346,16 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
             <button
               onClick={handleRerunValidation}
               disabled={isRerunningValidation}
-              className="px-6 py-3.5 rounded-xl bg-blue-900 hover:bg-blue-955 text-white font-bold text-sm transition-colors flex items-center gap-2 shadow-lg shadow-blue-955/20 disabled:opacity-50"
+              className="px-6 py-3.5 rounded-xl bg-blue-900 hover:bg-blue-950 text-white font-bold text-sm transition-colors flex items-center gap-2 shadow-lg disabled:opacity-50"
             >
               {isRerunningValidation ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Đang đối chiếu dữ liệu...</span>
+                  <span>Đang kiểm tra...</span>
                 </>
               ) : (
                 <>
-                  <span>Xác nhận kết quả OCR & Chạy đối chiếu L/C (Bước 2)</span>
+                  <span>Kiểm tra bộ chứng từ</span>
                   <span>➔</span>
                 </>
               )}
@@ -382,9 +396,9 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
                 activeTab === "internal" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
               }`}
             >
-              Kiểm tra nội bộ (Layer 1)
+              Kiểm tra nội bộ
               {layer1Discrepancies.length > 0 && (
-                <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-rose-600 text-white rounded-full text-[9px] font-bold">
                   {layer1Discrepancies.length}
                 </span>
               )}
@@ -395,9 +409,9 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
                 activeTab === "cross" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
               }`}
             >
-              Kiểm tra chéo chứng từ (Layer 2)
+              Kiểm tra chéo chứng từ
               {crossDiscrepancies.length > 0 && (
-                <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-rose-600 text-white rounded-full text-[9px] font-bold">
                   {crossDiscrepancies.length}
                 </span>
               )}
@@ -408,9 +422,9 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
                 activeTab === "lc" ? "text-blue-900 font-extrabold border-b-2 border-blue-900" : "text-slate-500 hover:text-slate-800"
               }`}
             >
-              Đối chiếu L/C (Layer 3)
+              Kiểm tra theo luật quốc tế
               {discrepancyList.length > 0 && (
-                <span className="ml-1.5 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[9px] font-bold">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-rose-600 text-white rounded-full text-[9px] font-bold">
                   {discrepancyList.length}
                 </span>
               )}
@@ -583,47 +597,115 @@ export const ResultsCard: React.FC<ResultsCardProps> = ({
             </div>
           )}
 
-          <div className="border-t border-slate-100 pt-4 mt-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
-            <div className="text-xs text-slate-500 text-center sm:text-left font-medium">
-              Quyết định thanh toán cuối cùng được thực hiện bởi Banker sau khi duyệt sai biệt.
-            </div>
-            <div className="flex gap-2 w-full sm:w-auto">
-              {(discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length) === 0 ? (
-                <button
-                  onClick={() => {
-                    setDecisionStatus("payout");
-                    addAuditLog("Chuyên viên xác nhận COMPLIANT. Hồ sơ đủ điều kiện giải ngân.", "success");
-                  }}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-                >
-                  <CheckCircle className="h-4 w-4" />
-                  <span>Xác nhận & Giải ngân</span>
-                </button>
-              ) : (
-                <>
-                  {!cannotWaive && (
+          {/* Unified Conclusion + Email */}
+          {(() => {
+            const totalErrors = discrepancyList.length + crossDiscrepancies.length + layer1Discrepancies.length;
+            const isCompliant = totalErrors === 0;
+            return (
+              <div className="border-t border-slate-100 pt-5 mt-5 space-y-4">
+                {/* Conclusion banner */}
+                <div className={`flex items-start gap-3 p-4 rounded-xl border ${
+                  isCompliant
+                    ? "bg-emerald-50 border-emerald-200"
+                    : cannotWaive
+                      ? "bg-rose-50 border-rose-200"
+                      : "bg-amber-50 border-amber-200"
+                }`}>
+                  {isCompliant
+                    ? <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                    : cannotWaive
+                      ? <XCircle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                      : <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                  }
+                  <div>
+                    <p className={`text-sm font-bold ${isCompliant ? "text-emerald-900" : cannotWaive ? "text-rose-900" : "text-amber-900"}`}>
+                      {isCompliant
+                        ? "Bộ chứng từ hợp lệ — Đủ điều kiện giải ngân"
+                        : cannotWaive
+                          ? "Từ chối tuyệt đối — Lỗi không thể Waiver (UCP 600)"
+                          : `Phát hiện ${totalErrors} sai biệt — Cần xin chấp thuận từ khách hàng`
+                      }
+                    </p>
+                    <p className={`text-xs mt-0.5 ${isCompliant ? "text-emerald-700" : cannotWaive ? "text-rose-700" : "text-amber-700"}`}>
+                      {isCompliant
+                        ? "Tất cả lớp kiểm tra đều thông qua — không có bất hợp lệ nào được ghi nhận."
+                        : `Nội bộ: ${layer1Discrepancies.length} · Chéo chứng từ: ${crossDiscrepancies.length} · Luật quốc tế: ${discrepancyList.length}`
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                {/* AI email content */}
+                {result?.waiver_draft && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-slate-700">Nội dung email AI soạn sẵn:</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleCopyEmail}
+                          className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-200"
+                        >
+                          {emailCopied ? (
+                            <span className="text-emerald-600 flex items-center gap-1"><Check className="h-3 w-3" /> Đã sao chép</span>
+                          ) : (
+                            <span className="flex items-center gap-1"><Copy className="h-3 w-3" /> Sao chép</span>
+                          )}
+                        </button>
+                        <a
+                          href={`mailto:?subject=Thong bao ket qua kiem tra chung tu L/C&body=${encodeURIComponent(result.waiver_draft)}`}
+                          className="px-3 py-1.5 rounded-lg bg-blue-900 hover:bg-blue-950 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                        >
+                          <Mail className="h-3 w-3" />
+                          <span>Gửi Email</span>
+                        </a>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl p-3 text-xs font-sans text-slate-700 whitespace-pre-wrap max-h-52 overflow-y-auto leading-relaxed border border-l-4 border-slate-200 border-l-amber-400">
+                      {result.waiver_draft}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex gap-3 pt-1">
+                  {isCompliant ? (
                     <button
                       onClick={() => {
-                        setDecisionStatus("pending_customer");
-                        addAuditLog("Chuyên viên gửi đề xuất Waiver đến Applicant. Trạng thái: Pending Customer Decision", "info");
+                        setDecisionStatus("payout");
+                        addAuditLog("Chuyên viên xác nhận COMPLIANT. Hồ sơ đủ điều kiện giải ngân.", "success");
                       }}
-                      className="w-full sm:w-auto px-5 py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
+                      className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
                     >
-                      <Mail className="h-4 w-4" />
-                      <span>Gửi Đề Xuất Waiver</span>
+                      <CheckCircle className="h-4 w-4" />
+                      <span>Xác nhận & Giải ngân</span>
                     </button>
+                  ) : (
+                    <>
+                      {!cannotWaive && (
+                        <button
+                          onClick={() => {
+                            setDecisionStatus("pending_customer");
+                            addAuditLog("Chuyên viên gửi đề xuất Waiver đến Applicant.", "info");
+                          }}
+                          className="flex-1 py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
+                        >
+                          <Mail className="h-4 w-4" />
+                          <span>Gửi Waiver cho Khách hàng</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setIsRejectModalOpen(true)}
+                        className="flex-1 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
+                      >
+                        <XCircle className="h-4 w-4" />
+                        <span>Từ chối thanh toán</span>
+                      </button>
+                    </>
                   )}
-                  <button
-                    onClick={() => setIsRejectModalOpen(true)}
-                    className="w-full sm:w-auto px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <XCircle className="h-4 w-4" />
-                    <span>Từ chối thanh toán</span>
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

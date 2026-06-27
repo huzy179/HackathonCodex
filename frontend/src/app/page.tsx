@@ -1,5 +1,7 @@
 "use client";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
@@ -173,7 +175,7 @@ export default function Home() {
   // Editable state (HITL)
   const [extractedDoc, setExtractedDoc] = useState<ExtractedDoc | null>(null);
   const [discrepancyList, setDiscrepancyList] = useState<Discrepancy[]>([]);
-  const [editingDoc, setEditingDoc] = useState<"invoice" | "bl" | "pl" | "co" | "cq" | null>(null);
+  const [editingDoc, setEditingDoc] = useState<"invoice" | "bl" | "pl" | "co" | "cq" | "insurance" | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -184,7 +186,7 @@ export default function Home() {
   useEffect(() => {
     const fetchAuditLogs = async () => {
       try {
-        const response = await axios.get("http://localhost:8000/api/v1/audit-trail");
+        const response = await axios.get(`${API_BASE}/api/v1/audit-trail`);
         setAuditLogs(response.data);
       } catch (err) {
         console.error("Không thể tải Audit Trail từ Backend:", err);
@@ -193,19 +195,38 @@ export default function Home() {
     fetchAuditLogs();
   }, []);
 
+  const badgeColors: Record<string, string> = {
+    "2": "bg-indigo-600",
+    "3": "bg-violet-600",
+    "4": "bg-emerald-600",
+    "5": "bg-amber-600",
+    "6": "bg-rose-600",
+  };
+
   const renderUploadSlot = (
     label: string,
     file: File | null,
     setFile: (file: File | null) => void,
     id: string,
-    description: string
+    description: string,
+    badgeNum?: number
   ) => {
+    const badgeCls = badgeNum !== undefined ? (badgeColors[String(badgeNum)] || "bg-blue-600") : "bg-blue-600";
     return (
-      <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/30 transition-all hover:bg-slate-50/60 flex flex-col justify-between min-h-[105px]">
-        <div className="flex justify-between items-start gap-2 mb-1.5">
-          <div>
-            <span className="text-xs font-bold text-slate-800 block">{label}</span>
-            <span className="text-[10px] text-slate-400 block">{description}</span>
+      <div className={`border-2 rounded-2xl p-4 bg-white transition-all flex flex-col justify-between min-h-[150px] ${
+        file ? "border-emerald-200 bg-emerald-50/20 shadow-sm" : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
+      }`}>
+        <div className="flex justify-between items-start gap-2 mb-3">
+          <div className="flex items-start gap-2.5">
+            {badgeNum !== undefined && (
+              <span className={`mt-0.5 shrink-0 h-6 w-6 rounded-lg ${badgeCls} text-white text-[10px] font-bold flex items-center justify-center shadow-sm`}>
+                {String(badgeNum).padStart(2, "0")}
+              </span>
+            )}
+            <div>
+              <span className="text-sm font-bold text-slate-800 block leading-tight">{label}</span>
+              <span className="text-[11px] text-slate-400 block mt-0.5">{description}</span>
+            </div>
           </div>
           {file && (
             <button
@@ -214,7 +235,7 @@ export default function Home() {
                 setFile(null);
                 addAuditLog(`Đã xóa tệp trong ô ${label}`, "info");
               }}
-              className="text-rose-600 hover:text-rose-800 transition-colors p-0.5 shrink-0"
+              className="text-rose-500 hover:text-rose-700 transition-colors p-0.5 shrink-0"
               title="Xóa tệp"
             >
               <XCircle className="h-4 w-4" />
@@ -223,13 +244,13 @@ export default function Home() {
         </div>
 
         {file ? (
-          <div className="flex items-center gap-2 bg-emerald-50/50 border border-emerald-100 rounded-lg p-2 text-xs text-emerald-800 font-medium">
+          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800">
             <FileCheck className="h-4 w-4 text-emerald-600 shrink-0" />
             <span className="truncate font-semibold flex-1" title={file.name}>{file.name}</span>
             <span className="text-emerald-600 font-mono text-[10px] shrink-0">{(file.size / 1024).toFixed(0)} KB</span>
           </div>
         ) : (
-          <div className="relative border-2 border-dashed border-slate-200 hover:border-slate-350 rounded-lg p-2 bg-white text-center cursor-pointer transition-all">
+          <div className="relative border-2 border-dashed border-slate-200 hover:border-blue-300 rounded-xl p-3 bg-slate-50 text-center cursor-pointer transition-all group">
             <input
               type="file"
               accept=".pdf,.docx,.doc"
@@ -244,9 +265,9 @@ export default function Home() {
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               id={id}
             />
-            <div className="flex items-center justify-center gap-1.5 text-slate-500">
-              <Upload className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-              <span className="text-[10px] font-bold">Chọn tệp PDF/DOCX/DOC</span>
+            <div className="flex items-center justify-center gap-2 text-slate-400 group-hover:text-blue-600 transition-colors">
+              <Upload className="h-4 w-4 shrink-0" />
+              <span className="text-xs font-bold">Chọn tệp PDF / DOCX / DOC</span>
             </div>
           </div>
         )}
@@ -274,7 +295,7 @@ export default function Home() {
   const addAuditLog = useCallback((msg: string, type: "info" | "success" | "warning" | "edit") => {
     const timeStr = new Date().toLocaleTimeString();
     setAuditLogs(prev => [{ time: timeStr, message: msg, type }, ...prev]);
-    axios.post("http://localhost:8000/api/v1/audit-trail", {
+    axios.post(`${API_BASE}/api/v1/audit-trail`, {
       time: timeStr,
       message: msg,
       type
@@ -548,7 +569,7 @@ export default function Home() {
     setIsParsingSwift(true);
     addAuditLog("Bắt đầu gọi AI phân tích điện SWIFT MT700...", "info");
     try {
-      const response = await axios.post("http://localhost:8000/api/v1/parse-swift", {
+      const response = await axios.post(`${API_BASE}/api/v1/parse-swift`, {
         swift_text: swiftText
       });
       
@@ -603,7 +624,7 @@ export default function Home() {
     formData.append("file", file);
     
     try {
-      const response = await axios.post("http://localhost:8000/api/v1/extract-lc-file", formData);
+      const response = await axios.post(`${API_BASE}/api/v1/extract-lc-file`, formData);
       if (response.data.status === "success" && response.data.lc_terms) {
         const terms = response.data.lc_terms;
         setLcTerms({
@@ -645,10 +666,10 @@ export default function Home() {
   };
 
   const handleStartAnalysis = async () => {
-    // 1. Validation
+    // 1. Validate L/C input
     if (lcInputMode === "swift") {
       if (!swiftText.trim()) {
-        setError("Vui lòng dán văn bản điện SWIFT MT700 ở Bước 1 trước.");
+        setError("Vui lòng dán văn bản điện SWIFT MT700 vào ô Bước 1 trước.");
         return;
       }
     } else {
@@ -658,6 +679,7 @@ export default function Home() {
       }
     }
 
+    // 2. Collect commercial files
     const selectedCommercialFiles = [
       invoiceFile ? { file: invoiceFile, type: "INVOICE" } : null,
       blFile ? { file: blFile, type: "BILL_OF_LADING" } : null,
@@ -668,107 +690,186 @@ export default function Home() {
     ].filter(Boolean) as { file: File; type: string }[];
 
     if (selectedCommercialFiles.length === 0) {
-      setError("Vui lòng tải lên ít nhất một tệp chứng từ thương mại ở Bước 2.");
+      setError("Vui lòng tải lên ít nhất một tệp chứng từ thương mại.");
       return;
     }
 
     const commercialFiles = selectedCommercialFiles.map(x => x.file);
-    setFiles(commercialFiles);
-
     const mapping: Record<string, string> = {};
-    selectedCommercialFiles.forEach(x => {
-      mapping[x.file.name] = x.type;
-    });
+    selectedCommercialFiles.forEach(x => { mapping[x.file.name] = x.type; });
+
+    // 3. Navigate to result screen and start loading immediately
+    setScreen("result");
+    setIsLoading(true);
+    setResult(null);
+    setError(null);
+    setExtractedDoc(null);
+    setExtractedBl(null);
+    setExtractedPl(null);
+    setExtractedCo(null);
+    setExtractedCq(null);
+    setExtractedInsurance(null);
+    setResultStep("ocr_check");
+    setDiscrepancyList([]);
+    setCrossDiscrepancies([]);
+    setTerminalLogs([]);
+    setFiles(commercialFiles);
     setFileTypesMap(mapping);
 
-    setIsLCOverallParsing(true);
-    setError(null);
-    addAuditLog("Khởi động quy trình thẩm định. Bước 1: Phân tích và trích xuất điều khoản L/C...", "info");
+    const addTerminalLog = (msg: string) => {
+      const t = new Date().toLocaleTimeString();
+      setTerminalLogs(prev => [...prev, `[${t}] ${msg}`]);
+    };
+
+    addTerminalLog("Khởi tạo quy trình thẩm định...");
+    addAuditLog("Khởi động quy trình thẩm định. Bước 1: Trích xuất điều khoản L/C...", "info");
 
     try {
+      // 4. Extract L/C terms first
+      let freshLcTerms = lcTerms;
+
       if (lcInputMode === "swift") {
-        const response = await axios.post("http://localhost:8000/api/v1/parse-swift", {
-          swift_text: swiftText
-        });
-        
-        if (response.data.status === "success" && response.data.lc_terms) {
-          const terms = response.data.lc_terms;
-          setLcTerms({
-            max_amount: terms.max_amount.toString(),
-            currency: terms.currency,
-            latest_shipment: terms.latest_shipment,
-            beneficiary_name: terms.beneficiary_name,
-            port_of_loading: terms.port_of_loading,
-            applicant_name: terms.applicant_name || "",
-            expiry_date: terms.expiry_date || "",
-            port_of_discharge: terms.port_of_discharge || "",
-            goods_description: terms.goods_description || "",
-            incoterms: terms.incoterms || "",
-            partial_shipment: terms.partial_shipment || "",
-            transhipment: terms.transhipment || "",
-            amount_tolerance: terms.amount_tolerance || ""
-          });
-          
-          // Extract confidences
+        addTerminalLog("Giải mã điện SWIFT MT700...");
+        const swiftResp = await axios.post(`${API_BASE}/api/v1/parse-swift`, { swift_text: swiftText });
+        if (swiftResp.data.status === "success" && swiftResp.data.lc_terms) {
+          const t = swiftResp.data.lc_terms;
+          freshLcTerms = {
+            max_amount: t.max_amount.toString(),
+            currency: t.currency,
+            latest_shipment: t.latest_shipment,
+            beneficiary_name: t.beneficiary_name,
+            port_of_loading: t.port_of_loading,
+            applicant_name: t.applicant_name || "",
+            expiry_date: t.expiry_date || "",
+            port_of_discharge: t.port_of_discharge || "",
+            goods_description: t.goods_description || "",
+            incoterms: t.incoterms || "",
+            partial_shipment: t.partial_shipment || "",
+            transhipment: t.transhipment || "",
+            amount_tolerance: t.amount_tolerance || ""
+          };
+          setLcTerms(freshLcTerms);
           const confs: Record<string, number> = {};
-          Object.keys(terms).forEach(key => {
-            if (key.endsWith("_confidence")) {
-              const fieldName = key.replace("_confidence", "");
-              confs[fieldName] = terms[key];
-            }
-          });
+          Object.keys(t).forEach(k => { if (k.endsWith("_confidence")) confs[k.replace("_confidence", "")] = t[k]; });
           setLcConfidences(confs);
-          
-          addAuditLog("Giải mã điện SWIFT MT700 và điền tự động tham chiếu L/C thành công! Chuyển sang Safety Gate.", "success");
-          setScreen("safety_gate");
+          addTerminalLog("Giải mã SWIFT MT700 thành công.");
+          addAuditLog("Giải mã điện SWIFT MT700 thành công.", "success");
         } else {
           throw new Error("Không thể trích xuất điện SWIFT.");
         }
       } else {
-        const formData = new FormData();
-        formData.append("file", lcFile!);
-        
-        const response = await axios.post("http://localhost:8000/api/v1/extract-lc-file", formData);
-        
-        if (response.data.status === "success" && response.data.lc_terms) {
-          const terms = response.data.lc_terms;
-          setLcTerms({
-            max_amount: terms.max_amount.toString(),
-            currency: terms.currency,
-            latest_shipment: terms.latest_shipment,
-            beneficiary_name: terms.beneficiary_name,
-            port_of_loading: terms.port_of_loading,
-            applicant_name: terms.applicant_name || "",
-            expiry_date: terms.expiry_date || "",
-            port_of_discharge: terms.port_of_discharge || "",
-            goods_description: terms.goods_description || "",
-            incoterms: terms.incoterms || "",
-            partial_shipment: terms.partial_shipment || "",
-            transhipment: terms.transhipment || "",
-            amount_tolerance: terms.amount_tolerance || ""
-          });
-          
-          // Extract confidences
+        addTerminalLog(`Đang OCR file L/C: ${lcFile!.name}...`);
+        const lcFormData = new FormData();
+        lcFormData.append("file", lcFile!);
+        const lcResp = await axios.post(`${API_BASE}/api/v1/extract-lc-file`, lcFormData);
+        if (lcResp.data.status === "success" && lcResp.data.lc_terms) {
+          const t = lcResp.data.lc_terms;
+          freshLcTerms = {
+            max_amount: t.max_amount.toString(),
+            currency: t.currency,
+            latest_shipment: t.latest_shipment,
+            beneficiary_name: t.beneficiary_name,
+            port_of_loading: t.port_of_loading,
+            applicant_name: t.applicant_name || "",
+            expiry_date: t.expiry_date || "",
+            port_of_discharge: t.port_of_discharge || "",
+            goods_description: t.goods_description || "",
+            incoterms: t.incoterms || "",
+            partial_shipment: t.partial_shipment || "",
+            transhipment: t.transhipment || "",
+            amount_tolerance: t.amount_tolerance || ""
+          };
+          setLcTerms(freshLcTerms);
           const confs: Record<string, number> = {};
-          Object.keys(terms).forEach(key => {
-            if (key.endsWith("_confidence")) {
-              const fieldName = key.replace("_confidence", "");
-              confs[fieldName] = terms[key];
-            }
-          });
+          Object.keys(t).forEach(k => { if (k.endsWith("_confidence")) confs[k.replace("_confidence", "")] = t[k]; });
           setLcConfidences(confs);
-          
-          addAuditLog(`Bóc tách L/C thành công! Chuyển sang Safety Gate để xác nhận.`, "success");
-          setScreen("safety_gate");
+          addTerminalLog("Bóc tách L/C thành công.");
+          addAuditLog("Bóc tách điều khoản L/C thành công.", "success");
         } else {
           throw new Error("Không thể bóc tách file L/C.");
         }
       }
+
+      // 5. Run commercial document check with fresh L/C terms
+      addTerminalLog("Khởi tạo yêu cầu phân tích đa chứng từ...");
+      const checkFormData = new FormData();
+      commercialFiles.forEach(f => checkFormData.append("files", f));
+      checkFormData.append("lc_rules", JSON.stringify(freshLcTerms));
+      checkFormData.append("file_types", JSON.stringify(mapping));
+
+      const checkResponse = await fetch(`${API_BASE}/api/v1/check-lc`, {
+        method: "POST",
+        body: checkFormData
+      });
+
+      if (!checkResponse.body) throw new Error("Không thể khởi tạo kết nối luồng.");
+
+      const reader = checkResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let resData: any = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const payload = JSON.parse(line);
+            if (payload.type === "progress") {
+              setLoadingStep(payload.msg);
+              addTerminalLog(payload.msg);
+            } else if (payload.type === "error") {
+              setError(payload.msg);
+              addTerminalLog(`[LỖI] ${payload.msg}`);
+              setIsLoading(false);
+              setLoadingStep("");
+              return;
+            } else if (payload.type === "result") {
+              resData = payload.data;
+              setResult(resData);
+              setExtractedDoc(resData.extracted);
+              setExtractedBl(resData.extracted_bl);
+              setExtractedPl(resData.extracted_pl);
+              setExtractedCo(resData.extracted_co);
+              setExtractedCq(resData.extracted_cq);
+              setExtractedInsurance(resData.extracted_insurance);
+              setDiscrepancyList(resData.discrepancies || []);
+              setLayer1Discrepancies(resData.layer1_discrepancies || []);
+              setCrossDiscrepancies(resData.cross_discrepancies || []);
+              setCannotWaive(resData.cannot_waive || false);
+              if (resData.extracted?.invoice_number) setActiveOcrTab("invoice");
+              else if (resData.extracted_bl) setActiveOcrTab("bl");
+              else if (resData.extracted_pl) setActiveOcrTab("pl");
+              else if (resData.extracted_co) setActiveOcrTab("co");
+              else if (resData.extracted_cq) setActiveOcrTab("cq");
+              else if (resData.extracted_insurance) setActiveOcrTab("insurance");
+              addTerminalLog("AI Engine hoàn tất bóc tách và kiểm toán chéo.");
+              addTerminalLog("Đối chiếu UCP 600 thành công.");
+            }
+          } catch { /* skip malformed chunk */ }
+        }
+      }
+
+      addAuditLog("Hoàn tất bóc tách & kiểm toán chéo dữ liệu qua Multi-Agent", "success");
+      if (resData) {
+        const totalErrors = (resData.layer1_discrepancies?.length || 0) + (resData.discrepancies?.length || 0) + (resData.cross_discrepancies?.length || 0);
+        if (totalErrors > 0) {
+          addAuditLog(`Đối chiếu hoàn tất: Phát hiện ${totalErrors} bất hợp lệ.`, "warning");
+        } else {
+          addAuditLog("Đối chiếu hoàn tất: Các chứng từ hợp lệ toàn phần với L/C!", "success");
+        }
+      }
     } catch (err: any) {
       console.error(err);
-      setError("Không thể bóc tách L/C. Vui lòng kiểm tra lại tệp/văn bản L/C hoặc kết nối backend.");
-      addAuditLog("Bóc tách L/C thất bại.", "warning");
+      setError(err.message || "Đã xảy ra lỗi kết nối với máy chủ API. Hãy đảm bảo Backend đang chạy tại port 8000.");
+      addAuditLog("Quá trình xử lý lỗi: " + (err.message || "Lỗi kết nối API"), "warning");
     } finally {
+      setIsLoading(false);
+      setLoadingStep("");
       setIsLCOverallParsing(false);
     }
   };
@@ -847,7 +948,7 @@ export default function Home() {
       addTerminalLog("Khởi tạo yêu cầu phân tích đa chứng từ...");
 
       // Call streaming API
-      const response = await fetch("http://localhost:8000/api/v1/check-lc", {
+      const response = await fetch(`${API_BASE}/api/v1/check-lc`, {
         method: "POST",
         body: formData
       });
@@ -979,7 +1080,7 @@ export default function Home() {
         extracted_insurance: extractedInsurance
       };
       
-      const response = await axios.post("http://localhost:8000/api/v1/validate-documents", payload);
+      const response = await axios.post(`${API_BASE}/api/v1/validate-documents`, payload);
       if (response.data.status === "success") {
         setDiscrepancyList(response.data.discrepancies || []);
         setLayer1Discrepancies(response.data.layer1_discrepancies || []);
@@ -1399,185 +1500,167 @@ export default function Home() {
             <span className="text-slate-700">Tạo kiểm tra mới</span>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* Left Column: L/C Document Input */}
-            <section className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-6">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <FileText className="text-blue-700 h-5 w-5" />
-                  <h2 className="text-md font-bold text-blue-900">Bước 1: Tải lên Thư tín dụng (L/C)</h2>
-                </div>
-                
-                <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-                  <button
-                    onClick={() => setLcInputMode("form")}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                      lcInputMode === "form" ? "bg-white text-blue-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    }`}
-                  >
-                    Tệp L/C PDF
-                  </button>
-                  <button
-                    onClick={() => setLcInputMode("swift")}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                      lcInputMode === "swift" ? "bg-white text-blue-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    }`}
-                  >
-                    Bức điện SWIFT
-                  </button>
+          <div className="space-y-6">
+            {/* All 6 document cards — equal level */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-4 mb-5">
+                <Upload className="text-blue-700 h-5 w-5" />
+                <div>
+                  <h2 className="text-md font-bold text-blue-900">Tải lên bộ chứng từ</h2>
+                  <p className="text-[11px] text-slate-400">Mỗi loại chứng từ có thể upload hoặc bỏ qua — cần ít nhất L/C và 1 chứng từ thương mại</p>
                 </div>
               </div>
 
-              {lcInputMode === "swift" ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs text-slate-500 font-bold mb-1.5 block">Dán văn bản điện SWIFT MT700 nguyên bản:</label>
-                    <textarea
-                      rows={8}
-                      value={swiftText}
-                      onChange={(e) => setSwiftText(e.target.value)}
-                      placeholder=":31D: Date and Place of Expiry: 260715\n:50: Applicant: IMPORT CO LTD\n:59: Beneficiary:\nGLOBAL TRADING CORP\n:32B: Currency Code, Amount: USD 50000\n:39A: Percentage Credit Amount Tolerance: 5/5\n:44E: Port of Loading: HAIPHONG PORT\n:44F: Port of Discharge: HAMBURG PORT\n:45A: Description of Goods: AGRICULTURAL PRODUCTS\n:44C: Latest Shipment Date: 2026-06-30"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-800 focus:outline-none focus:border-blue-700 focus:bg-white transition-all leading-normal"
-                    />
-                  </div>
-                  
-                  {swiftText.trim() && !isLCOverallParsing && (
-                    <p className="text-xs text-emerald-600 font-bold mt-2 flex items-center gap-1">
-                      ✓ Đã nhận bức điện SWIFT
-                    </p>
-                  )}
-
-                  {isLCOverallParsing && (
-                    <div className="flex flex-col items-center justify-center p-4 bg-blue-50/50 rounded-xl border border-blue-100 mt-2">
-                      <Loader2 className="h-6 w-6 text-blue-700 animate-spin mb-2" />
-                      <p className="text-xs font-bold text-blue-900">Agent AI đang đọc và phân tích điện SWIFT...</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Card 01: L/C */}
+                <div className={`border-2 rounded-2xl p-4 bg-white transition-all flex flex-col justify-between min-h-[150px] ${
+                  (lcFile || swiftText.trim()) ? "border-emerald-200 bg-emerald-50/20 shadow-sm" : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
+                }`}>
+                  <div className="flex justify-between items-start gap-2 mb-3">
+                    <div className="flex items-start gap-2.5">
+                      <span className="mt-0.5 shrink-0 h-6 w-6 rounded-lg bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">01</span>
+                      <div>
+                        <span className="text-sm font-bold text-slate-800 block leading-tight">Thư tín dụng (L/C)</span>
+                        <span className="text-[11px] text-slate-400 block mt-0.5">Letter of Credit — tài liệu gốc ngân hàng phát hành</span>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-4 flex-1 flex flex-col justify-between">
-                  <div>
-                    <label className="text-xs text-slate-500 font-bold mb-2 block">Chọn file PDF/DOCX/DOC của Thư tín dụng (L/C):</label>
-                    <div className="border-2 border-dashed border-slate-200 hover:border-slate-300 rounded-xl p-8 bg-slate-50/20 text-center cursor-pointer transition-all">
+                    {(lcFile || swiftText.trim()) && (
+                      <button
+                        type="button"
+                        onClick={() => { setLcFile(null); setSwiftText(""); setLcInputMode("form"); addAuditLog("Đã xóa file/điện L/C", "info"); }}
+                        className="text-rose-500 hover:text-rose-700 transition-colors p-0.5 shrink-0"
+                        title="Xóa"
+                      >
+                        <XCircle className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Same bottom area structure as renderUploadSlot */}
+                  {lcFile ? (
+                    <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800">
+                      <FileCheck className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <span className="truncate font-semibold flex-1" title={lcFile.name}>{lcFile.name}</span>
+                      <span className="text-emerald-600 font-mono text-[10px] shrink-0">{(lcFile.size / 1024).toFixed(0)} KB</span>
+                    </div>
+                  ) : swiftText.trim() && lcInputMode === "swift" ? (
+                    <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800">
+                      <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <span className="truncate font-semibold flex-1">Điện SWIFT MT700 đã nhập ({swiftText.trim().length} ký tự)</span>
+                    </div>
+                  ) : lcInputMode === "swift" ? (
+                    <div className="relative rounded-xl overflow-hidden">
+                      <textarea
+                        rows={3}
+                        value={swiftText}
+                        onChange={(e) => setSwiftText(e.target.value)}
+                        placeholder=":32B: USD 50000&#10;:50: IMPORT CO LTD&#10;:59: GLOBAL TRADING CORP"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-[10px] font-mono text-slate-800 focus:outline-none focus:border-blue-400 transition-all resize-none leading-relaxed"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => { setSwiftText(""); setLcInputMode("form"); }}
+                        className="absolute bottom-2 right-2 text-[9px] text-slate-400 hover:text-blue-600 font-semibold transition-colors bg-slate-50 px-1"
+                      >
+                        ← Dùng file PDF
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative border-2 border-dashed border-slate-200 hover:border-blue-300 rounded-xl p-3 bg-slate-50 text-center cursor-pointer transition-all group">
                       <input
                         type="file"
-                        accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
+                        accept=".pdf,.docx,.doc"
                         onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            setLcFile(file);
-                            setError(null);
-                            addAuditLog(`Đã chọn file L/C: ${file.name}`, "info");
-                          }
+                          const f = e.target.files?.[0];
+                          if (f) { setLcFile(f); setLcInputMode("form"); setError(null); addAuditLog(`Đã chọn file L/C: ${f.name}`, "info"); }
                         }}
-                        className="hidden"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         id="lc-file-upload"
                       />
-                      <label htmlFor="lc-file-upload" className="cursor-pointer">
-                        <div className="h-12 w-12 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-3 text-blue-600">
-                          <Upload className="h-5 w-5" />
+                      <div className="flex flex-col items-center gap-1.5 text-slate-400 group-hover:text-blue-600 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <Upload className="h-4 w-4 shrink-0" />
+                          <span className="text-xs font-bold">Chọn tệp PDF / DOCX / DOC</span>
                         </div>
-                        <p className="text-sm font-bold text-slate-700">Tải lên L/C dạng PDF, DOCX hoặc DOC</p>
-                        {lcFile && <p className="text-xs text-emerald-600 font-bold mt-1">Đã chọn: {lcFile.name}</p>}
-                        <p className="text-xs text-slate-400 mt-1">Hệ thống sẽ tự nhận diện và bóc tách các điều khoản</p>
-                      </label>
-                    </div>
-                  </div>
-
-                  {isLCOverallParsing && (
-                    <div className="flex flex-col items-center justify-center p-4 bg-blue-50/50 rounded-xl border border-blue-100">
-                      <Loader2 className="h-6 w-6 text-blue-700 animate-spin mb-2" />
-                      <p className="text-xs font-bold text-blue-900">Agent AI đang đọc và OCR tài liệu L/C...</p>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setLcInputMode("swift"); }}
+                          className="text-[9px] text-blue-500 hover:text-blue-700 font-semibold transition-colors pointer-events-auto"
+                        >
+                          hoặc dán điện SWIFT MT700 →
+                        </button>
+                      </div>
                     </div>
                   )}
+                </div>
+
+                {renderUploadSlot(
+                  "Hóa đơn thương mại",
+                  invoiceFile,
+                  setInvoiceFile,
+                  "invoice-upload",
+                  "Invoice — hóa đơn bán hàng / thanh toán chính thức",
+                  2
+                )}
+                {renderUploadSlot(
+                  "Vận đơn đường biển",
+                  blFile,
+                  setBlFile,
+                  "bl-upload",
+                  "Bill of Lading — chứng từ nhận hàng & vận tải biển",
+                  3
+                )}
+                {renderUploadSlot(
+                  "Phiếu đóng gói",
+                  plFile,
+                  setPlFile,
+                  "pl-upload",
+                  "Packing List — danh mục kích thước & khối lượng",
+                  4
+                )}
+                {renderUploadSlot(
+                  "Chứng nhận xuất xứ",
+                  coFile,
+                  setCoFile,
+                  "co-upload",
+                  "C/O — giấy xác nhận nguồn gốc quốc gia sản xuất",
+                  5
+                )}
+                {renderUploadSlot(
+                  "Chứng thư bảo hiểm",
+                  insuranceFile,
+                  setInsuranceFile,
+                  "insurance-upload",
+                  "Insurance Certificate — bảo hiểm hàng hóa vận tải quốc tế",
+                  6
+                )}
+              </div>
+            </section>
+
+            {/* Error & Submit */}
+            <div className="space-y-4">
+              {error && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-100 text-rose-700 text-xs flex gap-2.5 items-start">
+                  <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{error}</span>
                 </div>
               )}
-            </section>
 
-            {/* Right Column: Commercial Documents Upload */}
-            <section className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 mb-2 border-b border-slate-100 pb-3">
-                  <Upload className="text-blue-700 h-5 w-5" />
-                  <h2 className="text-md font-bold text-blue-900">Bước 2: Bộ chứng từ thương mại cần thẩm định</h2>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {renderUploadSlot(
-                    "Hóa đơn thương mại (Invoice)",
-                    invoiceFile,
-                    setInvoiceFile,
-                    "invoice-upload",
-                    "Hóa đơn bán hàng / thanh toán chính thức"
-                  )}
-                  {renderUploadSlot(
-                    "Vận đơn đường biển (Bill of Lading)",
-                    blFile,
-                    setBlFile,
-                    "bl-upload",
-                    "Chứng từ nhận hàng và vận tải đường biển"
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {renderUploadSlot(
-                    "Phiếu đóng gói (Packing List)",
-                    plFile,
-                    setPlFile,
-                    "pl-upload",
-                    "Danh mục chi tiết kích thước và khối lượng"
-                  )}
-                  {renderUploadSlot(
-                    "Chứng nhận xuất xứ (C/O)",
-                    coFile,
-                    setCoFile,
-                    "co-upload",
-                    "Giấy xác nhận nguồn gốc quốc gia sản xuất"
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {renderUploadSlot(
-                    "Chứng thư bảo hiểm (Insurance Certificate)",
-                    insuranceFile,
-                    setInsuranceFile,
-                    "insurance-upload",
-                    "Bảo hiểm hàng hóa vận tải quốc tế"
-                  )}
-                  {renderUploadSlot(
-                    "Chứng nhận chất lượng (C/Q) - Tùy chọn",
-                    cqFile,
-                    setCqFile,
-                    "cq-upload",
-                    "Giấy tờ chứng minh tiêu chuẩn chất lượng hàng hóa"
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-4">
-                {error && (
-                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-100 text-rose-700 text-xs flex gap-2.5 items-start">
-                    <XCircle className="h-4.5 w-4.5 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
+              <button
+                onClick={handleStartAnalysis}
+                disabled={isLCOverallParsing}
+                className="w-full py-4 rounded-xl bg-blue-950 hover:bg-blue-900 text-white font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-900/10 disabled:opacity-50"
+              >
+                {isLCOverallParsing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <span>Bắt đầu OCR &amp; Kiểm tra chứng từ →</span>
                 )}
-
-                <button
-                  onClick={handleStartAnalysis}
-                  disabled={isLCOverallParsing}
-                  className="w-full py-4 rounded-xl bg-blue-950 hover:bg-blue-900 text-white font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-900/10 disabled:opacity-50"
-                >
-                  {isLCOverallParsing ? (
-                    <>
-                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                      <span>Đang phân tích L/C...</span>
-                    </>
-                  ) : (
-                    <span>Bắt đầu phân tích toàn bộ chứng từ &gt;&gt;</span>
-                  )}
-                </button>
-              </div>
-            </section>
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -1747,90 +1830,26 @@ export default function Home() {
       {/* Main Workspace */}
       <main className="max-w-7xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left column: Inputs (Ground Truth read-only review) */}
+        {/* Left column: Audit Trail + Back button */}
         <section className="lg:col-span-5 flex flex-col gap-6">
-          {/* L/C Requirements Card (Read-only reference) */}
-          <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-              <div className="flex items-center gap-2">
-                <FileText className="text-blue-700 h-5 w-5" />
-                <h2 className="text-md font-bold text-blue-900">1. Điều khoản L/C tham chiếu (Ground Truth)</h2>
-              </div>
-              <span className="text-[10px] bg-blue-50 text-blue-800 font-bold px-2 py-0.5 rounded border border-blue-100 uppercase">Confirmed</span>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3.5 text-xs">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Người thụ hưởng</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.beneficiary_name}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Người mua (Applicant)</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.applicant_name}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4 border-t border-slate-100 pt-2.5">
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Hạn mức</span>
-                  <span className="font-mono font-semibold text-slate-800">{parseFloat(lcTerms.max_amount).toLocaleString()}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Tiền tệ</span>
-                  <span className="font-mono font-semibold text-slate-800">{lcTerms.currency}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Dung sai</span>
-                  <span className="font-mono font-semibold text-slate-800">{lcTerms.amount_tolerance}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-2.5">
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Hạn giao hàng</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.latest_shipment}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Ngày hết hạn</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.expiry_date}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-2.5">
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Cảng xếp</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.port_of_loading}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block uppercase tracking-wider">Cảng dỡ</span>
-                  <span className="font-semibold text-slate-800">{lcTerms.port_of_discharge}</span>
-                </div>
-              </div>
-
-              <div className="border-t border-slate-100 pt-2.5">
-                <span className="text-slate-400 font-bold block uppercase tracking-wider">Mô tả hàng hóa</span>
-                <span className="font-semibold text-slate-800">{lcTerms.goods_description}</span>
-              </div>
-            </div>
-            
+          <div className="bg-white border border-blue-900/5 rounded-2xl p-4 shadow-sm">
             <button
               onClick={() => setScreen("upload")}
-              className="w-full py-2.5 mt-5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all text-center"
+              className="w-full py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all text-center flex items-center justify-center gap-2"
             >
-              Thay đổi tệp L/C & chứng từ
+              <Upload className="h-3.5 w-3.5" />
+              Thay đổi bộ chứng từ
             </button>
           </div>
 
-          {/* Audit Trail Section */}
           {!isLoading && auditLogs.length > 0 && (
             <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
                 <Clock className="text-blue-700 h-5 w-5" />
                 <h3 className="text-sm font-bold text-blue-900">Nhật ký vận hành (Audit Trail)</h3>
               </div>
-              
-              <div className="relative border-l-2 border-slate-200 pl-4 ml-2 space-y-4 max-h-52 overflow-y-auto">
+
+              <div className="relative border-l-2 border-slate-200 pl-4 ml-2 space-y-4 max-h-96 overflow-y-auto">
                 {auditLogs.map((log, index) => {
                   let dotColor = "bg-slate-300";
                   if (log.type === "success") dotColor = "bg-emerald-500";
@@ -1982,132 +2001,44 @@ export default function Home() {
           )}
 
           {decisionStatus === "pending_customer" && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-              <div className="lg:col-span-8 bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md animate-[fadeIn_0.5s_ease-out]">
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-slate-100 pb-4 mb-4">
-                  <div className="flex items-center gap-2">
-                    <Mail className="text-blue-700 h-5 w-5" />
-                    <div>
-                      <h3 className="text-lg font-bold text-blue-900">Thư yêu cầu xin bỏ qua lỗi (Waiver Request)</h3>
-                      <p className="text-xs text-amber-600 font-semibold uppercase tracking-wider mt-0.5">Trạng thái: Pending Customer Decision</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 mt-2 md:mt-0">
-                    <button
-                      onClick={handleCopyEmail}
-                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-200"
-                    >
-                      {copied ? (
-                        <span className="text-emerald-600 flex items-center gap-1">
-                          <Check className="h-3.5 w-3.5" /> Đã sao chép!
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1">
-                          <Copy className="h-3.5 w-3.5" /> Sao chép thư
-                        </span>
-                      )}
-                    </button>
-                    <a
-                      href={`mailto:?subject=Thong bao vướng mắc L/C &body=${encodeURIComponent(result?.waiver_draft || "")}`}
-                      className="px-4 py-2 rounded-xl bg-blue-900 hover:bg-blue-950 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                    >
-                      <Mail className="h-3.5 w-3.5" />
-                      <span>Gửi Email</span>
-                    </a>
+            <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md animate-[fadeIn_0.5s_ease-out]">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                <div className="flex items-center gap-2">
+                  <Mail className="text-blue-700 h-5 w-5" />
+                  <div>
+                    <h3 className="text-lg font-bold text-blue-900">Nội dung email gửi khách hàng (Waiver Request)</h3>
+                    <p className="text-xs text-amber-600 font-semibold uppercase tracking-wider mt-0.5">AI tự động soạn thảo — có thể chỉnh sửa trước khi gửi</p>
                   </div>
                 </div>
-
-                <p className="text-xs text-slate-500 mb-4">
-                  AI đã tự động soạn thảo thư đề xuất bỏ qua lỗi (Waiver Letter) song ngữ để xin ý kiến phản hồi chấp thuận từ phía Người mua hàng (Applicant).
-                </p>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 font-sans text-sm text-slate-700 whitespace-pre-wrap max-h-96 overflow-y-auto leading-relaxed border-l-4 border-amber-500">
-                  {result?.waiver_draft}
+                <div className="flex items-center gap-2 mt-2 md:mt-0">
+                  <button
+                    onClick={handleCopyEmail}
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-200"
+                  >
+                    {copied ? (
+                      <span className="text-emerald-600 flex items-center gap-1">
+                        <Check className="h-3.5 w-3.5" /> Đã sao chép!
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1">
+                        <Copy className="h-3.5 w-3.5" /> Sao chép
+                      </span>
+                    )}
+                  </button>
+                  <a
+                    href={`mailto:?subject=Thong bao vuong mac chung tu L/C&body=${encodeURIComponent(result?.waiver_draft || "")}`}
+                    className="px-4 py-2 rounded-xl bg-blue-900 hover:bg-blue-950 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    <span>Gửi Email</span>
+                  </a>
                 </div>
               </div>
-
-              {/* Customer Response Simulator (BA v2.0 requirements) */}
-              <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-6 shadow-md flex flex-col justify-between">
-                <div>
-                  <h3 className="text-sm font-extrabold text-blue-900 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <User className="h-4 w-4" />
-                    <span>Mô phỏng Khách hàng (Applicant)</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 leading-normal">
-                    Trình mô phỏng quyết định của người nhập khẩu khi nhận được thư yêu cầu Waiver của ngân hàng.
-                  </p>
-                </div>
-
-                <div className="space-y-3 mt-6">
-                  <button
-                    onClick={() => {
-                      setDecisionStatus("compliant_with_waiver");
-                      addAuditLog("Khách hàng (Applicant) đã đồng ý bỏ qua các lỗi sai biệt chứng từ (Waiver Accepted).", "success");
-                    }}
-                    className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Check className="h-4 w-4" />
-                    <span>Chấp nhận Waiver (Đồng ý lỗi)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDecisionStatus("rejected");
-                      setRejectReason("Người mua từ chối chấp nhận sai biệt chứng từ thương mại.");
-                      addAuditLog("Khách hàng (Applicant) từ chối Waiver các lỗi sai biệt chứng từ.", "warning");
-                    }}
-                    className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <XCircle className="h-4 w-4" />
-                    <span>Từ chối Waiver (Hủy thanh toán)</span>
-                  </button>
-                </div>
+              <div className="bg-slate-50 rounded-xl p-4 font-sans text-sm text-slate-700 whitespace-pre-wrap max-h-96 overflow-y-auto leading-relaxed border border-amber-100 border-l-4 border-l-amber-500">
+                {result?.waiver_draft}
               </div>
             </div>
           )}
-        </section>
-      )}
-
-      {/* Audit Trail Section */}
-      {!isLoading && auditLogs.length > 0 && (
-        <section className="max-w-7xl mx-auto px-6 mt-8">
-          <div className="bg-white border border-blue-900/5 rounded-2xl p-6 shadow-md">
-            <div className="flex items-center gap-2 border-b border-slate-100 pb-4 mb-4">
-              <Clock className="text-blue-700 h-5 w-5" />
-              <h3 className="text-lg font-bold text-blue-900">Nhật ký vận hành (Audit Trail)</h3>
-            </div>
-            
-            <div className="relative border-l-2 border-slate-200 pl-6 ml-3 space-y-4 max-h-60 overflow-y-auto">
-              {auditLogs.map((log, index) => {
-                let dotColor = "bg-slate-300";
-                if (log.type === "success") dotColor = "bg-emerald-500";
-                if (log.type === "warning") dotColor = "bg-rose-500";
-                if (log.type === "edit") dotColor = "bg-blue-600";
-
-                return (
-                  <div key={index} className="relative">
-                    {/* Dot decoration */}
-                    <span className={`absolute -left-[31px] top-1.5 h-3.5 w-3.5 rounded-full border-2 border-white ${dotColor} shadow-sm`}></span>
-                    
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                      <p className="text-xs text-slate-400 font-mono font-semibold">{log.time}</p>
-                      <p className="text-sm text-slate-700 flex-1 sm:ml-4 font-medium">{log.message}</p>
-                      <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
-                        log.type === "success" 
-                          ? "bg-emerald-50 text-emerald-700 border border-emerald-100" 
-                          : log.type === "warning"
-                            ? "bg-rose-50 text-rose-700 border border-rose-100"
-                            : log.type === "edit"
-                              ? "bg-blue-50 text-blue-700 border border-blue-100"
-                              : "bg-slate-100 text-slate-500"
-                      }`}>
-                        {log.type === "edit" ? "HIỆU CHỈNH" : log.type}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </section>
       )}
 
